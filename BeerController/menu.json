@@ -1,0 +1,219 @@
+{
+	"menu": [
+		{
+			"id": "Welcome",
+			"type": "info", 
+			"args": "\"Hello, Brewer\", 0, &timeLine"
+		},
+		{
+			"id": "Program",
+			"type": "info", 
+			"args": "\"Program\", 0, 0"
+		},
+		{
+			"id": "Manual",
+			"type": "info", 
+			"args": "\"Manual Control\", 0, 0",
+			"menu": [
+				{
+					"id": "back",
+					"type": "info", 
+					"args": "\"<-\", 0, 0"
+				},
+				{
+					"id": "Temperature",
+					"type": "info", 
+					"args": "\"Temperature\", 0, 0",
+					"menu": [
+						{
+							"id": "TemperatureViewer",
+							"type": "view",
+							"ctype": "float",
+							"args": "\"Temperature\", &temperature"
+						}
+					]
+				},
+				{
+					"id": "TempSensorWork",
+					"type": "info", 
+					"args": "\"Temp Sensor Work\", 0, 0",
+					"menu": [
+						{
+							"id": "TempSensorWorkViewer",
+							"type": "view",
+							"ctype": "bool",
+							"args": "\"Temp Sensor Work\", &temperatureSensorWork"
+						}
+					]
+				},
+				{
+					"id": "Pump",
+					"type": "info", 
+					"args": "\"Pump Power\", 0, 0",
+					"menu": [
+						{
+							"id": "PumpEditor",
+							"type": "edit", 
+							"ctype": "bool",
+							"args": "\"Pump\", &pumpWork, 1, 0, 1"
+						}
+					]
+				},
+				{
+					"id": "Heat",
+					"type": "info",
+					"args": "\"Heat Power\", 0, 0",
+					"menu": [
+						{
+							"id": "HeatEditor",
+							"type": "edit",
+							"ctype": "int",
+							"args": "\"Heat Power\", &heatPower, 2, 0, 100"
+						}
+					]
+				}
+			]
+		},
+		{
+			"id": "Settings",
+			"type": "info",
+			"args": "\"Settings\", 0, 0",
+			"menu": [
+				{
+					"id": "back",
+					"type": "info", 
+					"args": "\"<-\", 0, 0"
+				},
+				{
+					"id": "SetTime",
+					"type": "info",
+					"args": "\"Set Time\", 0, 0",
+					"menu": [
+						{
+							"id": "back",
+							"type": "info", 
+							"args": "\"<-\", 0, 0"
+						},
+						{
+							"id": "Year",
+							"type": "info",
+							"args": "\"Year\", 0, 0", 
+							"menu": [
+								{
+									"id": "YearEditor",
+									"type": "edit",
+									"ctype": "int",
+									"args": "\"Year\", &year, 1, 1970, 2100, saveTime"
+								}
+							]
+						},
+						{
+							"id": "Month",
+							"type": "info",
+							"args": "\"Month\", 0, 0",
+							"menu": [
+								{
+									"id": "MonthEditor",
+									"type": "edit",
+									"ctype": "byte",
+									"args": "\"Month\", &month, 1, 1, 12, saveTime"
+								}
+							]
+						},
+						{
+							"id": "Day",
+							"type": "info",
+							"args": "\"Day\", 0, 0",
+							"menu": [
+								{
+									"id": "DayEditor",
+									"type": "edit",
+									"ctype": "byte",
+									"args": "\"Day\", &day, 1, 0, 31, saveTime"
+								}
+							]
+						},
+						{
+							"id": "Hour",
+							"type": "info",
+							"args": "\"Hour\", 0, 0",
+							"menu": [
+								{
+									"id": "HourEditor",
+									"type": "edit",
+									"ctype": "byte",
+									"args": "\"Hour\", &hour, 1, 0, 23, saveTime"
+								}
+							]
+						},
+						{
+							"id": "Minute",
+							"type": "info",
+							"args": "\"Minute\", 0, 0",
+							"menu": [
+								{
+									"id": "MinuteEditor",
+									"type": "edit",
+									"ctype": "byte",
+									"args": "\"Minute\", &minute, 1, 0, 59, saveTime"
+								}
+							]
+						}
+					]
+				},
+				{
+					"id": "Kp",
+					"type": "info",
+					"args": "\"Kp\", 0, 0",
+					"menu": [
+						{
+							"id": "KpEditor",
+							"type": "edit",
+							"ctype": "float",
+							"args": "\"Kp\", &Kp, 0.1, 0, 100"
+						}
+					]
+				},
+				{
+					"id": "Ki",
+					"type": "info",
+					"args": "\"Ki\", 0, 0",
+					"menu": [
+						{
+							"id": "KiEditor",
+							"type": "edit",
+							"ctype": "float",
+							"args": "\"Ki\", &Ki, 0.1, 0, 100"
+						}
+					]
+				},
+				{
+					"id": "Kd",
+					"type": "info",
+					"args": "\"Kd\", 0, 0",
+					"menu": [
+						{
+							"id": "KdEditor",
+							"type": "edit",
+							"ctype": "float",
+							"args": "\"Kd\", &Kd, 0.1, 0, 100"
+						}
+					]
+				},
+				{
+					"id": "ReverseEnc",
+					"type": "info",
+					"args": "\"Reverse Encoder\", 0, 0",
+					"menu": [
+						{
+							"id": "ReverseEnc",
+							"type": "edit",
+							"ctype": "bool",
+							"args": "\"Reverse Encoder\", &reverseEncoder, 1, 0, 1"
+						}
+					]
+				}
+			]
+		}
+	]	
+}

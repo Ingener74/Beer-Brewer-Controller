@@ -1,0 +1,133 @@
+{#-----------------------------------------------------------------#}
+{%- macro back_prefix(name, prefix) %}
+	{%- if 'back' == name %}{{prefix}}_
+	{%- endif %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro item_suffix(menu_name, name, type) %}
+	{%- if 'edit' == type %}{{name}}_Editor
+	{%- elif 'view' == type %}{{name}}_Viewer
+	{%- elif 'info' == type %}
+		{%- if 'back' == name %}{{menu_name}}_{{name}}_Info
+		{%- else %}{{name}}_Info
+		{%- endif %}
+	{%- endif %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro menu_type_suffix(type, ctype) %}
+	{%- if 'edit' == type %}MenuEditor<{{ctype}}>
+	{%- elif 'view' == type %}MenuViewer<{{ctype}}>
+	{%- elif 'info' == type %}MenuInfo
+	{%- endif %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro create_menu(name, menu) %}
+	{%- for m in menu %}
+{{menu_type_suffix(m.type, m.ctype)}} {{item_suffix(name, m.id, m.type)}}({{m.args}});
+		{%- if m.menu %}
+			{{- create_menu(m.id, m.menu)| indent(4, True) }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro get_child_menu(name, menu) %}
+	{%- for m in menu %}
+		{%- if loop.index == 1 %}
+			{{- item_suffix(name, m.id, m.type) }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro make_button_handler(name, menu, parent) %}
+	{%- for m in menu %}
+		{%- if m.menu %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{get_child_menu(name, m.menu)}}; break; }
+		{%- else %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{parent}}; break; }
+		{%- endif %}
+
+		{%- if m.menu %}{{ make_button_handler(m.id, m.menu, item_suffix("main", m.id, m.type))|indent(4, True) }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro get_next(menu, index) %}
+	{%- for m in menu %}
+		{%- if loop.index == index + 1 %}
+			{{- m.id }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro make_up_handler(name, menu) %}
+	{%- for m in menu %}
+		{%- if loop.index < loop.length %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{- item_suffix(name, get_next(menu, loop.index), m.type)}}; break; }
+		{%- else %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { break; }
+		{%- endif %}
+
+		{%- if m.menu %}
+			{{- make_up_handler(m.id, m.menu)|indent(4, True) }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro get_prev(menu, index) %}
+	{%- for m in menu %}
+		{%- if loop.index == index - 1 %}
+			{{- m.id }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+{%- macro make_down_handler(name, menu) %}
+	{%- for m in menu %}
+		{%- if loop.index > 1 %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{- item_suffix(name, get_prev(menu, loop.index), m.type)}}; break; }
+		{%- else %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { break; }
+		{%- endif %}
+
+		{%- if m.menu %}
+			{{- make_down_handler(m.id, m.menu)|indent(4, True) }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
+{#-----------------------------------------------------------------#}
+
+{{- create_menu("Main", menu) }}
+
+// button handler
+do{
+	{%- for m in menu %}
+		{%- if m.menu %}
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{get_child_menu(m.id, m.menu)}}; break; }
+		{%- else %}
+// if (current == &{{item_suffix("main", m.id, m.type)}}) {}
+		{%- endif %}
+		{%- if m.menu %}
+			{{- make_button_handler(m.id, m.menu, item_suffix("main", m.id, m.type))|indent(4, True) }}
+		{%- endif %}
+	{%- endfor %}
+}while(false);
+
+// up handler
+do{
+{{- make_up_handler("", menu) }}
+}while(false);
+
+// down handler
+do{
+{{- make_down_handler("", menu) }}
+}while(false);

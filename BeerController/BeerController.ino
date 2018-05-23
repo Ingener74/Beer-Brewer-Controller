@@ -8,8 +8,6 @@
 // lcd1602
 #include <LiquidCrystal_I2C.h>
 
-#include <DS1302.h>
-
 #include <RTClock.h>
 
 ///////////////////////////////////////////////////////////////////////
@@ -174,33 +172,6 @@ struct Line
   virtual bool update() = 0;
 };
 
-struct TimeLine: Line
-{
-  TimeLine(DS1302* rtc_)
-    : rtc(rtc_)
-    , showSec(false)
-  {
-  }
-  const char* str()
-  {
-    Time t = rtc->time();
-    snprintf(buffer, sizeof(buffer), "%02d%s%02d %02d.%02d.%04d", 
-      t.hr, showSec ? ":" : " ", t.min, t.date, t.mon, t.yr);
-    showSec = !showSec;
-    return buffer;
-  }
-
-  bool update()
-  {
-    return timer.update();
-  }
-
-  DS1302* rtc;
-  bool showSec;
-  char buffer[17];
-  MyTimer timer;
-};
-
 struct IntTimeLine: Line
 {
   IntTimeLine(RTClock* rtc_)
@@ -231,105 +202,15 @@ struct IntTimeLine: Line
 
 
 ///////////////////////////////////////////////////////////////////////
-struct MenuStack;
-
 struct MenuItem
 {
   virtual ~MenuItem() {}
 
-  virtual bool Update()
-  {
-    return false;
-  }
-  
-  virtual bool Print(LiquidCrystal_I2C& lcd)
-  {
-    return false;
-  }
-  
-  virtual bool HandleButton(MenuStack* stack)
-  {
-    return false;
-  }
-  
-  virtual bool HandleEncoderPlus()
-  {
-    return false;
-  }
-  
-  virtual bool HandleEncoderMinus()
-  {
-    return false;
-  }  
-};
-
-struct MenuStack: MenuItem
-{
-  static const byte MAX = 10;
-
-  static byte MenuSize(MenuItem** menu)
-  {
-    byte size = 0;
-    while(menu[size] != 0)
-      size++;
-    return size;
-  }
-
-  MenuStack(MenuItem** menu)
-    : t(0)
-  {
-    menus[t] = menu;
-    poses[t] = 0;
-    sizes[t] = MenuSize(menu);
-  }
-
-  void Push(MenuItem** menu)
-  {
-    t++;
-    menus[t] = menu;
-    poses[t] = 0;
-    sizes[t] = MenuSize(menu);
-  }
-  void Pop()
-  {
-    t--;
-  }
-
-  virtual bool Update()
-  {
-    return menus[t][poses[t]]->Update();
-  }
-  
-  virtual bool Print(LiquidCrystal_I2C& lcd)
-  {
-    return menus[t][poses[t]]->Print(lcd);
-  }
-  
-  virtual bool HandleButton(MenuStack* stack)
-  {
-    return menus[t][poses[t]]->HandleButton(stack);
-  }
-  
-  virtual bool HandleEncoderPlus()
-  {
-    if (menus[t][poses[t]]->HandleEncoderPlus())
-      return true;
-    poses[t] = constrain(poses[t] + 1, 0, sizes[t] - 1);
-    return false;
-  }
-  
-  virtual bool HandleEncoderMinus()
-  {
-    if (menus[t][poses[t]]->HandleEncoderMinus())
-      return true;
-    poses[t] = constrain(poses[t] - 1, 0, sizes[t] - 1);
-    return false;
-  }
-  
-  MenuItem** menus[MAX];
-  byte poses[MAX];
-  byte sizes[MAX];
-  byte t;
+  virtual bool Update(){ return true; }  
+  virtual bool Print(LiquidCrystal_I2C& lcd){ return true; }  
+  virtual bool HandleButton(){ return true; }
+  virtual bool HandleEncoderPlus(){ return true; }
+  virtual bool HandleEncoderMinus(){ return true; }
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -342,10 +223,8 @@ struct MenuInfo: MenuItem
   MenuInfo(
     const char* message1_ = 0,
     const char* message2_ = 0, 
-    Line* line2_ = 0,
-    MenuItem** list_ = 0)
+    Line* line2_ = 0)
     : message1(message1_)
-    , list(list_)
   {
     if (message2_ && !line2_)
     {
@@ -389,32 +268,12 @@ struct MenuInfo: MenuItem
     return true;
   }
   
-  virtual bool HandleButton(MenuStack* stack)
-  {
-    if (list)
-      stack->Push(list);
-    else
-      stack->Pop();
-    return false;
-  }
-  
-  virtual bool HandleEncoderPlus()
-  {
-    return false;
-  }
-  
-  virtual bool HandleEncoderMinus()
-  {
-    return false;
-  }
-
   const char* message1;
   union{
     const char* message2;
     Line* line2;
   };
   byte type;
-  MenuItem** list;
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -424,7 +283,7 @@ struct MenuViewer: MenuInfo
   MenuViewer(
     const char* message_, 
     T* value_)
-    : MenuInfo(message_, 0, 0, 0)
+    : MenuInfo(message_, 0, 0)
     , value(value_)
   {}
 
@@ -490,7 +349,7 @@ struct MenuEditor: MenuInfo
     T min_,
     T max_, 
     Handler handler_ = 0)
-    : MenuInfo(message_, 0, 0, 0)
+    : MenuInfo(message_, 0, 0)
     , value(value_)
     , step(step_)
     , handler(handler_)
@@ -652,6 +511,7 @@ bool temperatureSensorWork = false;
 const int zeroOffsetAddr = 0;
 int zeroOffset = 0;
 int pumpPower = 0;
+bool pumpWork = 0;
 int heatPower = 0;
 
 SingleMicrosecondTimer zeroOffsetTimer;
@@ -662,80 +522,46 @@ float Kp = 0;
 float Ki = 0;
 float Kd = 0;
 
+bool reverseEncoder = false;
+
 MyTimer tempTimer(1000);
 
-  MenuInfo                    welcome("Hello, Brewer", 0, &timeLine, 0);
-  MenuInfo                    program("Program", 0, 0, 0);
+MenuInfo Welcome_Info("Hello, Brewer", 0, &timeLine);
+MenuInfo Program_Info("Program", 0, 0);
+MenuInfo Manual_Info("Manual Control", 0, 0);    
+    MenuInfo Manual_back_Info("<-", 0, 0);
+    MenuInfo Temperature_Info("Temperature", 0, 0);    
+        MenuViewer<float> TemperatureViewer_Viewer("Temperature", &temperature);
+    MenuInfo TempSensorWork_Info("Temp Sensor Work", 0, 0);    
+        MenuViewer<bool> TempSensorWorkViewer_Viewer("Temp Sensor Work", &temperatureSensorWork);
+    MenuInfo Pump_Info("Pump Power", 0, 0);    
+        MenuEditor<bool> PumpEditor_Editor("Pump", &pumpWork, 1, 0, 1);
+    MenuInfo Heat_Info("Heat Power", 0, 0);    
+        MenuEditor<int> HeatEditor_Editor("Heat Power", &heatPower, 2, 0, 100);
+MenuInfo Settings_Info("Settings", 0, 0);    
+    MenuInfo Settings_back_Info("<-", 0, 0);
+    MenuInfo SetTime_Info("Set Time", 0, 0);    
+        MenuInfo SetTime_back_Info("<-", 0, 0);
+        MenuInfo Year_Info("Year", 0, 0);    
+            MenuEditor<int> YearEditor_Editor("Year", &year, 1, 1970, 2100, saveTime);
+        MenuInfo Month_Info("Month", 0, 0);    
+            MenuEditor<byte> MonthEditor_Editor("Month", &month, 1, 1, 12, saveTime);
+        MenuInfo Day_Info("Day", 0, 0);    
+            MenuEditor<byte> DayEditor_Editor("Day", &day, 1, 0, 31, saveTime);
+        MenuInfo Hour_Info("Hour", 0, 0);    
+            MenuEditor<byte> HourEditor_Editor("Hour", &hour, 1, 0, 23, saveTime);
+        MenuInfo Minute_Info("Minute", 0, 0);    
+            MenuEditor<byte> MinuteEditor_Editor("Minute", &minute, 1, 0, 59, saveTime);
+    MenuInfo Kp_Info("Kp", 0, 0);    
+        MenuEditor<float> KpEditor_Editor("Kp", &Kp, 0.1, 0, 100);
+    MenuInfo Ki_Info("Ki", 0, 0);    
+        MenuEditor<float> KiEditor_Editor("Ki", &Ki, 0.1, 0, 100);
+    MenuInfo Kd_Info("Kd", 0, 0);    
+        MenuEditor<float> KdEditor_Editor("Kd", &Kd, 0.1, 0, 100);
+    MenuInfo ReverseEnc_Info("Reverse Encoder", 0, 0);    
+        MenuEditor<bool> ReverseEnc_Editor("Reverse Encoder", &reverseEncoder, 1, 0, 1);
 
-    MenuInfo                    controlBack("<-", 0, 0, 0);
-      
-      MenuViewer<float>           tempViewer("Temperature", &temperature);
-    MenuItem*                   temperatureInfo_[] = {&tempViewer, 0};
-    MenuInfo                    temperatureInfo("Temperature", 0, 0, temperatureInfo_);
-
-      MenuViewer<bool>            temperatureSensorWorkViewer("Temp Sensor Work", &temperatureSensorWork);
-    MenuItem*                   temperatureSensorWorkInfo_[] = {&temperatureSensorWorkViewer, 0};
-    MenuInfo                    temperatureSensorWorkInfo("Temp Sensor Work", 0, 0, temperatureSensorWorkInfo_);
-
-      MenuEditor<int>             pumpPowerEditor("Pump Power", &pumpPower, 2, 0, 100);
-    MenuItem*                   pumpPowerInfo_[] = {&pumpPowerEditor, 0};
-    MenuInfo                    pumpPowerInfo("Pump Power", 0, 0, pumpPowerInfo_);
-
-      MenuEditor<int>             heatPowerEditor("Heat Power", &heatPower, 2, 0, 100);
-    MenuItem*                   heatPowerInfo_[] = {&heatPowerEditor, 0};
-    MenuInfo                    heatPowerInfo("Heat Power", 0, 0, heatPowerInfo_); 
-
-      MenuEditor<int>             zeroOffsetEditor("Zero Offset", &zeroOffset, 1, 0, 100);
-    MenuItem*                   zeroOffsetInfo_[] = {&zeroOffsetEditor, 0};
-    MenuInfo                    zeroOffsetInfo("Zero Offset", 0, 0, zeroOffsetInfo_); 
-
-  MenuItem*                   control_[] = {&controlBack, &temperatureInfo, &temperatureSensorWorkInfo, &pumpPowerInfo, &heatPowerInfo, &zeroOffsetInfo, 0};
-  MenuInfo                    control("Manual Control", 0, 0, control_);
-
-    MenuInfo                    backSettings("<-", 0, 0, 0);
-      MenuInfo                    timeSetBack("<-", 0, 0, 0);
-      
-        MenuEditor<byte>            minuteEditor("Minute", &minute, 1, 0, 59, saveTime);
-      MenuItem*                   minuteInfo_[] = {&minuteEditor, 0};
-      MenuInfo                    minuteInfo("Minute", 0, 0, minuteInfo_);
-        
-        MenuEditor<byte>            hourEditor("Hour", &hour, 1, 0, 23, saveTime);
-      MenuItem*                   hourInfo_[] = {&hourEditor, 0};
-      MenuInfo                    hourInfo("Hour", 0, 0, hourInfo_);
-
-        MenuEditor<byte>            dayEditor("Day", &day, 1, 0, 31, saveTime);
-      MenuItem*                   dayInfo_[] = {&dayEditor, 0};
-      MenuInfo                    dayInfo("Day", 0, 0, dayInfo_);
-
-        MenuEditor<byte>            monthEditor("Month", &month, 1, 1, 12, saveTime);
-      MenuItem*                   monthInfo_[] = {&monthEditor, 0};
-      MenuInfo                    monthInfo("Month", 0, 0, monthInfo_);
-        
-        MenuEditor<int>             yearEditor("Year", &year, 1, 2000, 2100, saveTime);
-      MenuItem*                   yearInfo_[] = {&yearEditor, 0};
-      MenuInfo                    yearInfo("Year", 0, 0, yearInfo_);
-      
-    MenuItem*                   timeSet_[] = {&timeSetBack, &minuteInfo, &hourInfo, &dayInfo, &monthInfo, &yearInfo, 0};
-    MenuInfo                    timeSet("Set Time", 0, 0, timeSet_);
-
-      MenuEditor<float>           KpSetEditor("Kp", &Kp, 0.1, 0, 100);
-    MenuItem*                   KpSetInfo_[] = {&KpSetEditor, 0};
-    MenuInfo                    KpSetInfo("Kp", 0, 0, KpSetInfo_);
-    
-      MenuEditor<float>           KiSetEditor("Ki", &Ki, 0.1, 0, 100);
-    MenuItem*                   KiSetInfo_[] = {&KiSetEditor, 0};
-    MenuInfo                    KiSetInfo("Ki", 0, 0, KiSetInfo_);
-    
-      MenuEditor<float>           KdSetEditor("Kd", &Kd, 0.1, 0, 100);
-    MenuItem*                   KdSetInfo_[] = {&KdSetEditor, 0};
-    MenuInfo                    KdSetInfo("Kd", 0, 0, KdSetInfo_);
-    
-  MenuItem*                   settings_[] = {&backSettings, &timeSet, &KpSetInfo, &KiSetInfo, &KdSetInfo, 0};
-  MenuInfo                    settings("Settings", 0, 0, settings_);
-
-  MenuItem* root_[] = {&welcome, &program, &control, &settings, 0};
-  MenuStack stack(root_);
-  
+MenuItem* current = &Welcome_Info;
 
 Button button;
 RotaryEncoder encoder;
@@ -743,6 +569,8 @@ RotaryEncoder encoder;
 void downHandler(void*);
 void plus(void*);
 void minus(void*);
+void minusHandler(void*);
+void plusHandler(void*);
 
 void setupMenu();
 void setupTemperature();
@@ -757,7 +585,7 @@ void setup()
   Serial.begin(115200);
 
   button.init(ReButtonPin, downHandler, 0);
-  encoder.init(RePin1, RePin2, plus, minus);
+  encoder.init(RePin1, RePin2, plusHandler, minusHandler);
 
   lcd.begin();
 
@@ -828,13 +656,15 @@ void loop()
     digitalWrite(PumpPin, LOW);
   }
 
-  dataChanged |= stack.Update();
+  if (current)
+    dataChanged |= current->Update();  
 
   if (dataChanged)
   {
     lcd.clear();
 
-    stack.Print(lcd);
+    if (current)
+      current->Print(lcd);
     
     dataChanged = false;
  }
@@ -863,20 +693,151 @@ void setupTemperature()
 
 void downHandler(void*)
 {
-  stack.HandleButton(&stack);
-  dataChanged = true;
+// button handler
+do{
+// if (current == &Welcome_Info) {}
+// if (current == &Program_Info) {}
+if (current == &Manual_Info) { current = &Manual_back_Info; break; }    
+    if (current == &Manual_back_Info) { current = &Manual_Info; break; }
+    if (current == &Temperature_Info) { current = &TemperatureViewer_Viewer; break; }    
+        if (current == &TemperatureViewer_Viewer) { current = &Temperature_Info; break; }
+    if (current == &TempSensorWork_Info) { current = &TempSensorWorkViewer_Viewer; break; }    
+        if (current == &TempSensorWorkViewer_Viewer) { current = &TempSensorWork_Info; break; }
+    if (current == &Pump_Info) { current = &PumpEditor_Editor; break; }    
+        if (current == &PumpEditor_Editor) { current = &Pump_Info; break; }
+    if (current == &Heat_Info) { current = &HeatEditor_Editor; break; }    
+        if (current == &HeatEditor_Editor) { current = &Heat_Info; break; }
+if (current == &Settings_Info) { current = &Settings_back_Info; break; }    
+    if (current == &Settings_back_Info) { current = &Settings_Info; break; }
+    if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    
+        if (current == &SetTime_back_Info) { current = &SetTime_Info; break; }
+        if (current == &Year_Info) { current = &YearEditor_Editor; break; }    
+            if (current == &YearEditor_Editor) { current = &Year_Info; break; }
+        if (current == &Month_Info) { current = &MonthEditor_Editor; break; }    
+            if (current == &MonthEditor_Editor) { current = &Month_Info; break; }
+        if (current == &Day_Info) { current = &DayEditor_Editor; break; }    
+            if (current == &DayEditor_Editor) { current = &Day_Info; break; }
+        if (current == &Hour_Info) { current = &HourEditor_Editor; break; }    
+            if (current == &HourEditor_Editor) { current = &Hour_Info; break; }
+        if (current == &Minute_Info) { current = &MinuteEditor_Editor; break; }    
+            if (current == &MinuteEditor_Editor) { current = &Minute_Info; break; }
+    if (current == &Kp_Info) { current = &KpEditor_Editor; break; }    
+        if (current == &KpEditor_Editor) { current = &Kp_Info; break; }
+    if (current == &Ki_Info) { current = &KiEditor_Editor; break; }    
+        if (current == &KiEditor_Editor) { current = &Ki_Info; break; }
+    if (current == &Kd_Info) { current = &KdEditor_Editor; break; }    
+        if (current == &KdEditor_Editor) { current = &Kd_Info; break; }
+    if (current == &ReverseEnc_Info) { current = &ReverseEnc_Editor; break; }    
+        if (current == &ReverseEnc_Editor) { current = &ReverseEnc_Info; break; }
+}while(false);
+  if (current)
+      current->HandleButton();
+    dataChanged = true;
 }
 
 void plus(void*)
 {
-  stack.HandleEncoderPlus();
+// up handler
+do{
+if (current == &Welcome_Info) { current = &Program_Info; break; }
+if (current == &Program_Info) { current = &Manual_Info; break; }
+if (current == &Manual_Info) { current = &Settings_Info; break; }    
+    if (current == &Manual_back_Info) { current = &Temperature_Info; break; }
+    if (current == &Temperature_Info) { current = &TempSensorWork_Info; break; }    
+        if (current == &TemperatureViewer_Viewer) { break; }
+    if (current == &TempSensorWork_Info) { current = &Pump_Info; break; }    
+        if (current == &TempSensorWorkViewer_Viewer) { break; }
+    if (current == &Pump_Info) { current = &Heat_Info; break; }    
+        if (current == &PumpEditor_Editor) { break; }
+    if (current == &Heat_Info) { break; }    
+        if (current == &HeatEditor_Editor) { break; }
+if (current == &Settings_Info) { break; }    
+    if (current == &Settings_back_Info) { current = &SetTime_Info; break; }
+    if (current == &SetTime_Info) { current = &Kp_Info; break; }    
+        if (current == &SetTime_back_Info) { current = &Year_Info; break; }
+        if (current == &Year_Info) { current = &Month_Info; break; }    
+            if (current == &YearEditor_Editor) { break; }
+        if (current == &Month_Info) { current = &Day_Info; break; }    
+            if (current == &MonthEditor_Editor) { break; }
+        if (current == &Day_Info) { current = &Hour_Info; break; }    
+            if (current == &DayEditor_Editor) { break; }
+        if (current == &Hour_Info) { current = &Minute_Info; break; }    
+            if (current == &HourEditor_Editor) { break; }
+        if (current == &Minute_Info) { break; }    
+            if (current == &MinuteEditor_Editor) { break; }
+    if (current == &Kp_Info) { current = &Ki_Info; break; }    
+        if (current == &KpEditor_Editor) { break; }
+    if (current == &Ki_Info) { current = &Kd_Info; break; }    
+        if (current == &KiEditor_Editor) { break; }
+    if (current == &Kd_Info) { current = &ReverseEnc_Info; break; }    
+        if (current == &KdEditor_Editor) { break; }
+    if (current == &ReverseEnc_Info) { break; }    
+        if (current == &ReverseEnc_Editor) { break; }
+}while(false);
+  if (current)
+      current->HandleEncoderPlus();
   dataChanged = true;
 }
 
+
 void minus(void*)
 {
-  stack.HandleEncoderMinus();  
+// down handler
+do{
+if (current == &Welcome_Info) { break; }
+if (current == &Program_Info) { current = &Welcome_Info; break; }
+if (current == &Manual_Info) { current = &Program_Info; break; }    
+    if (current == &Manual_back_Info) { break; }
+    if (current == &Temperature_Info) { current = &Manual_back_Info; break; }    
+        if (current == &TemperatureViewer_Viewer) { break; }
+    if (current == &TempSensorWork_Info) { current = &Temperature_Info; break; }    
+        if (current == &TempSensorWorkViewer_Viewer) { break; }
+    if (current == &Pump_Info) { current = &TempSensorWork_Info; break; }    
+        if (current == &PumpEditor_Editor) { break; }
+    if (current == &Heat_Info) { current = &Pump_Info; break; }    
+        if (current == &HeatEditor_Editor) { break; }
+if (current == &Settings_Info) { current = &Manual_Info; break; }    
+    if (current == &Settings_back_Info) { break; }
+    if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    
+        if (current == &SetTime_back_Info) { break; }
+        if (current == &Year_Info) { current = &SetTime_back_Info; break; }    
+            if (current == &YearEditor_Editor) { break; }
+        if (current == &Month_Info) { current = &Year_Info; break; }    
+            if (current == &MonthEditor_Editor) { break; }
+        if (current == &Day_Info) { current = &Month_Info; break; }    
+            if (current == &DayEditor_Editor) { break; }
+        if (current == &Hour_Info) { current = &Day_Info; break; }    
+            if (current == &HourEditor_Editor) { break; }
+        if (current == &Minute_Info) { current = &Hour_Info; break; }    
+            if (current == &MinuteEditor_Editor) { break; }
+    if (current == &Kp_Info) { current = &SetTime_Info; break; }    
+        if (current == &KpEditor_Editor) { break; }
+    if (current == &Ki_Info) { current = &Kp_Info; break; }    
+        if (current == &KiEditor_Editor) { break; }
+    if (current == &Kd_Info) { current = &Ki_Info; break; }    
+        if (current == &KdEditor_Editor) { break; }
+    if (current == &ReverseEnc_Info) { current = &Kd_Info; break; }    
+        if (current == &ReverseEnc_Editor) { break; }
+}while(false);
+  if (current)
+      current->HandleEncoderMinus();
   dataChanged = true;
+}
+
+void minusHandler(void*)
+{
+  if (reverseEncoder)
+    plus(0);
+  else
+    minus(0);
+}
+
+void plusHandler(void*)
+{
+  if (reverseEncoder)
+    minus(0);
+  else
+    plus(0);
 }
 
 void saveTime()
