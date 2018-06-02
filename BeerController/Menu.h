@@ -1,16 +1,25 @@
 
 MenuInfo Welcome_Info("Hello, Brewer", 0, &timeLine);
-MenuInfo Program_Info("Program", 0, 0);
+MenuInfo Program_Info("Program", 0, 0);    
+    MenuInfo Program_back_Info("<-", 0, 0);
+    MenuInfo RunProgram_Info("Run program", 0, 0);
+    MenuInfo NewProgram_Info("New program", 0, 0);
 MenuInfo Manual_Info("Manual Control", 0, 0);    
     MenuInfo Manual_back_Info("<-", 0, 0);
     MenuInfo Temperature_Info("Temperature", 0, 0);    
         MenuViewer<float> TemperatureViewer_Viewer("Temperature", &temperature);
     MenuInfo TempSensorWork_Info("Temp Sensor Work", 0, 0);    
         MenuViewer<bool> TempSensorWorkViewer_Viewer("Temp Sensor Work", &temperatureSensorWork);
-    MenuInfo Pump_Info("Pump Power", 0, 0);    
+    MenuInfo Pump_Info("Pump", 0, 0);    
         MenuEditor<bool> PumpEditor_Editor("Pump", &pumpWork, 1, 0, 1);
     MenuInfo Heat_Info("Heat Power", 0, 0);    
-        MenuEditor<int> HeatEditor_Editor("Heat Power", &heatPower, 2, 0, 100);
+        MenuEditor<byte> HeatEditor_Editor("Heat Power", &heatPower, 2, 0, 100, resetHeat);
+    MenuInfo SetTemp_Info("Set temperature", 0, 0);    
+        MenuInfo SetTemp_back_Info("<-", 0, 0);
+        MenuInfo SetTempOn_Info("On/Off", 0, 0);    
+            MenuEditor<bool> SetTempOn_Editor("On/Off", &setTemperatureWork, 1, 0, 1);
+        MenuInfo SetTemperature_Info("Set temperature", 0, 0);    
+            MenuEditor<float> SetTemperature_Editor("Set temperature", &setTemperature, 5, 0, 110, saveConfig);
 MenuInfo Settings_Info("Settings", 0, 0);    
     MenuInfo Settings_back_Info("<-", 0, 0);
     MenuInfo SetTime_Info("Set Time", 0, 0);    
@@ -26,18 +35,21 @@ MenuInfo Settings_Info("Settings", 0, 0);
         MenuInfo Minute_Info("Minute", 0, 0);    
             MenuEditor<byte> MinuteEditor_Editor("Minute", &minute, 1, 0, 59, saveTime);
     MenuInfo Kp_Info("Kp", 0, 0);    
-        MenuEditor<float> KpEditor_Editor("Kp", &Kp, 0.1, 0, 100);
+        MenuEditor<float> KpEditor_Editor("Kp", &Kp, 0.1, 0, 100, saveConfig);
     MenuInfo Ki_Info("Ki", 0, 0);    
-        MenuEditor<float> KiEditor_Editor("Ki", &Ki, 0.1, 0, 100);
+        MenuEditor<float> KiEditor_Editor("Ki", &Ki, 0.001, 0, 100, saveConfig);
     MenuInfo Kd_Info("Kd", 0, 0);    
-        MenuEditor<float> KdEditor_Editor("Kd", &Kd, 0.1, 0, 100);
+        MenuEditor<float> KdEditor_Editor("Kd", &Kd, 0.001, 0, 100, saveConfig);
     MenuInfo ReverseEnc_Info("Reverse Encoder", 0, 0);    
-        MenuEditor<bool> ReverseEnc_Editor("Reverse Encoder", &reverseEncoder, 1, 0, 1);
+        MenuEditor<bool> ReverseEnc_Editor("Reverse Encoder", &reverseEncoder, 1, 0, 1, saveConfig);
 
 // button handler
 do{
 // if (current == &Welcome_Info) {}
-// if (current == &Program_Info) {}
+if (current == &Program_Info) { current = &Program_back_Info; break; }    
+    if (current == &Program_back_Info) { current = &Program_Info; break; }
+    if (current == &RunProgram_Info) { current = &Program_Info; break; }
+    if (current == &NewProgram_Info) { current = &Program_Info; break; }
 if (current == &Manual_Info) { current = &Manual_back_Info; break; }    
     if (current == &Manual_back_Info) { current = &Manual_Info; break; }
     if (current == &Temperature_Info) { current = &TemperatureViewer_Viewer; break; }    
@@ -48,9 +60,15 @@ if (current == &Manual_Info) { current = &Manual_back_Info; break; }
         if (current == &PumpEditor_Editor) { current = &Pump_Info; break; }
     if (current == &Heat_Info) { current = &HeatEditor_Editor; break; }    
         if (current == &HeatEditor_Editor) { current = &Heat_Info; break; }
+    if (current == &SetTemp_Info) { current = &SetTemp_back_Info; break; }    
+        if (current == &SetTemp_back_Info) { current = &SetTemp_Info; break; }
+        if (current == &SetTempOn_Info) { current = &SetTempOn_Editor; break; }    
+            if (current == &SetTempOn_Editor) { current = &SetTempOn_Info; break; }
+        if (current == &SetTemperature_Info) { current = &SetTemperature_Editor; break; }    
+            if (current == &SetTemperature_Editor) { current = &SetTemperature_Info; break; }
 if (current == &Settings_Info) { current = &Settings_back_Info; break; }    
     if (current == &Settings_back_Info) { current = &Settings_Info; break; }
-    if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    
+    if (current == &SetTime_Info) { current = &SetTime_back_Info; break; }    
         if (current == &SetTime_back_Info) { current = &SetTime_Info; break; }
         if (current == &Year_Info) { current = &YearEditor_Editor; break; }    
             if (current == &YearEditor_Editor) { current = &Year_Info; break; }
@@ -75,7 +93,10 @@ if (current == &Settings_Info) { current = &Settings_back_Info; break; }
 // up handler
 do{
 if (current == &Welcome_Info) { current = &Program_Info; break; }
-if (current == &Program_Info) { current = &Manual_Info; break; }
+if (current == &Program_Info) { current = &Manual_Info; break; }    
+    if (current == &Program_back_Info) { current = &RunProgram_Info; break; }
+    if (current == &RunProgram_Info) { current = &NewProgram_Info; break; }
+    if (current == &NewProgram_Info) { break; }
 if (current == &Manual_Info) { current = &Settings_Info; break; }    
     if (current == &Manual_back_Info) { current = &Temperature_Info; break; }
     if (current == &Temperature_Info) { current = &TempSensorWork_Info; break; }    
@@ -84,8 +105,14 @@ if (current == &Manual_Info) { current = &Settings_Info; break; }
         if (current == &TempSensorWorkViewer_Viewer) { break; }
     if (current == &Pump_Info) { current = &Heat_Info; break; }    
         if (current == &PumpEditor_Editor) { break; }
-    if (current == &Heat_Info) { break; }    
+    if (current == &Heat_Info) { current = &SetTemp_Info; break; }    
         if (current == &HeatEditor_Editor) { break; }
+    if (current == &SetTemp_Info) { break; }    
+        if (current == &SetTemp_back_Info) { current = &SetTempOn_Info; break; }
+        if (current == &SetTempOn_Info) { current = &SetTemperature_Info; break; }    
+            if (current == &SetTempOn_Editor) { break; }
+        if (current == &SetTemperature_Info) { break; }    
+            if (current == &SetTemperature_Editor) { break; }
 if (current == &Settings_Info) { break; }    
     if (current == &Settings_back_Info) { current = &SetTime_Info; break; }
     if (current == &SetTime_Info) { current = &Kp_Info; break; }    
@@ -113,7 +140,10 @@ if (current == &Settings_Info) { break; }
 // down handler
 do{
 if (current == &Welcome_Info) { break; }
-if (current == &Program_Info) { current = &Welcome_Info; break; }
+if (current == &Program_Info) { current = &Welcome_Info; break; }    
+    if (current == &Program_back_Info) { break; }
+    if (current == &RunProgram_Info) { current = &Program_back_Info; break; }
+    if (current == &NewProgram_Info) { current = &RunProgram_Info; break; }
 if (current == &Manual_Info) { current = &Program_Info; break; }    
     if (current == &Manual_back_Info) { break; }
     if (current == &Temperature_Info) { current = &Manual_back_Info; break; }    
@@ -124,6 +154,12 @@ if (current == &Manual_Info) { current = &Program_Info; break; }
         if (current == &PumpEditor_Editor) { break; }
     if (current == &Heat_Info) { current = &Pump_Info; break; }    
         if (current == &HeatEditor_Editor) { break; }
+    if (current == &SetTemp_Info) { current = &Heat_Info; break; }    
+        if (current == &SetTemp_back_Info) { break; }
+        if (current == &SetTempOn_Info) { current = &SetTemp_back_Info; break; }    
+            if (current == &SetTempOn_Editor) { break; }
+        if (current == &SetTemperature_Info) { current = &SetTempOn_Info; break; }    
+            if (current == &SetTemperature_Editor) { break; }
 if (current == &Settings_Info) { current = &Manual_Info; break; }    
     if (current == &Settings_back_Info) { break; }
     if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    

@@ -46,7 +46,7 @@
 {%- macro make_button_handler(name, menu, parent) %}
 	{%- for m in menu %}
 		{%- if m.menu %}
-if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{get_child_menu(name, m.menu)}}; break; }
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{get_child_menu(m.id, m.menu)}}; break; }
 		{%- else %}
 if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{parent}}; break; }
 		{%- endif %}
@@ -65,11 +65,19 @@ if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{parent}}; br
 	{%- endfor %}
 {%- endmacro %}
 
+{%- macro get_next_type(menu, index) %}
+	{%- for m in menu %}
+		{%- if loop.index == index + 1 %}
+			{{- m.type }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
 {#-----------------------------------------------------------------#}
 {%- macro make_up_handler(name, menu) %}
 	{%- for m in menu %}
 		{%- if loop.index < loop.length %}
-if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{- item_suffix(name, get_next(menu, loop.index), m.type)}}; break; }
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{- item_suffix(name, get_next(menu, loop.index), get_next_type(menu, loop.index))}}; break; }
 		{%- else %}
 if (current == &{{item_suffix(name, m.id, m.type)}}) { break; }
 		{%- endif %}
@@ -89,11 +97,19 @@ if (current == &{{item_suffix(name, m.id, m.type)}}) { break; }
 	{%- endfor %}
 {%- endmacro %}
 
+{%- macro get_prev_type(menu, index) %}
+	{%- for m in menu %}
+		{%- if loop.index == index - 1 %}
+			{{- m.type }}
+		{%- endif %}
+	{%- endfor %}
+{%- endmacro %}
+
 {#-----------------------------------------------------------------#}
 {%- macro make_down_handler(name, menu) %}
 	{%- for m in menu %}
 		{%- if loop.index > 1 %}
-if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{- item_suffix(name, get_prev(menu, loop.index), m.type)}}; break; }
+if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{- item_suffix(name, get_prev(menu, loop.index), get_prev_type(menu, loop.index))}}; break; }
 		{%- else %}
 if (current == &{{item_suffix(name, m.id, m.type)}}) { break; }
 		{%- endif %}

@@ -10,6 +10,8 @@
 
 #include <RTClock.h>
 
+#include <EEPROM.h>
+
 ///////////////////////////////////////////////////////////////////////
 struct MyTimer
 {
@@ -71,6 +73,44 @@ struct SingleMicrosecondTimer
 
   long delay;
   unsigned long prevMicrosecond;
+};
+
+///////////////////////////////////////////////////////////////////////
+struct SingleMillisecondTimer
+{
+  SingleMillisecondTimer()
+    : delay(-1)
+    , prev(0)
+  {
+  }
+
+  void start(long delay_)
+  {
+    delay = delay_;
+    prev = millis();
+  }
+
+  bool update()
+  {
+    if (delay == -1)
+      return false;
+
+    unsigned long millisecond = millis();
+    unsigned long delta = 0;
+    delta = millisecond - prev;
+    prev = millisecond;
+    delay -= delta;
+    if (delay < 0)
+    {
+      delay = -1;
+      prev = 0;
+      return true;
+    }
+    return false;
+  }
+
+  long delay;
+  unsigned long prev;
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -368,7 +408,8 @@ struct MenuEditor: MenuInfo
   
   virtual bool HandleEncoderPlus()
   {
-    *value = constrain(*value + step, min, max);
+    float m = Multiplier();
+    *value = constrain(*value + (step * m), min, max);
     if (handler)
     {
       handler();
@@ -379,7 +420,8 @@ struct MenuEditor: MenuInfo
 
   virtual bool HandleEncoderMinus()
   {
-    *value = constrain(*value - step, min, max);
+    float m = Multiplier();
+    *value = constrain(*value - (step * m), min, max);
     if (handler)
     {
       handler();
@@ -388,19 +430,21 @@ struct MenuEditor: MenuInfo
     return true;
   }
   
-  virtual bool Print(LiquidCrystal_I2C& lcd)
+  virtual bool Print(LiquidCrystal_I2C& lcd);
+
+  float Multiplier()
   {
-    if (message1 == 0)
-      return false;
-    lcd.setCursor(0, 0);
-    lcd.print(message1);
-    lcd.setCursor(0, 1);
-    lcd.print("= ");
-    if (value == 0)
-    {
-      return false;
-    }
-    lcd.print(*value);
+    unsigned long now = millis();
+    long d = now - prevEditTime;
+    float m = 1;
+    if (d < 25)
+      m = 100;
+    else if (d < 50)
+      m = 10;
+    else if (d < 100)
+      m = 1;
+    prevEditTime = now;
+    return m;
   }
 
   MyTimer updateTimer;
@@ -410,12 +454,63 @@ struct MenuEditor: MenuInfo
   T max;
   Handler handler;
   bool updated;
+  unsigned long prevEditTime;
 };
 
+template<>
+bool MenuEditor<float>::Print(LiquidCrystal_I2C& lcd)
+{
+  if (message1 == 0)
+    return false;
+  lcd.setCursor(0, 0);
+  lcd.print(message1);
+  lcd.setCursor(0, 1);
+  lcd.print("= ");
+  if (value == 0)
+  {
+    return false;
+  }
+  lcd.print(*value, 3);
+}
+
+template<>
+bool MenuEditor<bool>::Print(LiquidCrystal_I2C& lcd)
+{
+  if (message1 == 0)
+    return false;
+  lcd.setCursor(0, 0);
+  lcd.print(message1);
+  lcd.setCursor(0, 1);
+  lcd.print("= ");
+  if (value == 0)
+  {
+    return false;
+  }
+  if (*value)
+    lcd.print("On");
+  else
+    lcd.print("Off");
+}
+
+template<typename T>
+bool MenuEditor<T>::Print(LiquidCrystal_I2C& lcd)
+{
+  if (message1 == 0)
+    return false;
+  lcd.setCursor(0, 0);
+  lcd.print(message1);
+  lcd.setCursor(0, 1);
+  lcd.print("= ");
+  if (value == 0)
+  {
+    return false;
+  }
+  lcd.print(*value);
+}
 ///////////////////////////////////////////////////////////////////////
 struct PID
 {
-  PID(float Kp, float Ki, float Kd)
+  PID(float* Kp, float* Ki, float* Kd)
     : Kp(Kp)
     , Ki(Ki)
     , Kd(Kd)
@@ -429,21 +524,21 @@ struct PID
     float error = required - real;
 
     float result = 0;
-    result += Kp * error;
+    result += (*Kp) * error;
 
-    float integral = prevIntegral + Ki * error;
+    float integral = prevIntegral + (*Ki) * error;
     prevIntegral = integral;
     result += integral;
 
-    result += Kd * (error - prevError);
+    result += (*Kd) * (error - prevError);
     prevError = error;
     
     return result;
   }
 
-  float Kp;
-  float Ki;
-  float Kd;
+  float* Kp;
+  float* Ki;
+  float* Kd;
 
   float prevIntegral;
   
@@ -453,17 +548,36 @@ struct PID
 ///////////////////////////////////////////////////////////////////////
 struct PowerControl
 {
+  PowerControl(int pin_, byte* compare_)
+    : pin(pin_)
+    , compare(compare_)
+  {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+  }
   void update()
   {
-//    counter++;
-//    if (counter > )
-//    {
-//      counter = 0;
-//    }
+    counter++;
+    if (counter >= 100)
+    {
+      counter = 0;
+      digitalWrite(pin, HIGH);
+    }
+    if (counter >= *compare)
+    {
+      digitalWrite(pin, LOW);
+    }
   }
-  
+
+  void reset()
+  {
+    counter = 0;
+    digitalWrite(pin, LOW);
+  }
+
+  int pin;
   byte counter;
-  byte compare;
+  byte* compare;
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -489,6 +603,7 @@ bool dataChanged = true;
 OneWire oneWire(TempPin);
 DallasTemperature sensors(&oneWire);
 DeviceAddress insideThermometer;
+const int resolution = 12;
 
 // Real Time Clock
 RTClock rt(RTCSEL_LSE);
@@ -507,37 +622,56 @@ MyTimer updateTime_;
 // Temperature
 float temperature = 0.0;
 bool temperatureSensorWork = false;
+SingleMillisecondTimer temperatureTimer;
 
 const int zeroOffsetAddr = 0;
 int zeroOffset = 0;
 int pumpPower = 0;
 bool pumpWork = 0;
-int heatPower = 0;
+byte heatPower = 0;
 
-SingleMicrosecondTimer zeroOffsetTimer;
-SingleMicrosecondTimer pumpPowerTimer;
-SingleMicrosecondTimer heatPowerTimer;
+PowerControl heat(HeatPin, &heatPower);
+void resetHeat();
+
+bool setTemperatureWork = false;
+float setTemperature = 0;
 
 float Kp = 0;
 float Ki = 0;
 float Kd = 0;
 
+PID heatRegulator(&Kp, &Ki, &Kd);
+MyTimer regulatorTimer(100);
+
+float heatOutput = 0.f;
+
 bool reverseEncoder = false;
 
-MyTimer tempTimer(1000);
+
+int loadConfig();
+void saveConfig();
 
 MenuInfo Welcome_Info("Hello, Brewer", 0, &timeLine);
-MenuInfo Program_Info("Program", 0, 0);
+MenuInfo Program_Info("Program", 0, 0);    
+    MenuInfo Program_back_Info("<-", 0, 0);
+    MenuInfo RunProgram_Info("Run program", 0, 0);
+    MenuInfo NewProgram_Info("New program", 0, 0);
 MenuInfo Manual_Info("Manual Control", 0, 0);    
     MenuInfo Manual_back_Info("<-", 0, 0);
     MenuInfo Temperature_Info("Temperature", 0, 0);    
         MenuViewer<float> TemperatureViewer_Viewer("Temperature", &temperature);
     MenuInfo TempSensorWork_Info("Temp Sensor Work", 0, 0);    
         MenuViewer<bool> TempSensorWorkViewer_Viewer("Temp Sensor Work", &temperatureSensorWork);
-    MenuInfo Pump_Info("Pump Power", 0, 0);    
+    MenuInfo Pump_Info("Pump", 0, 0);    
         MenuEditor<bool> PumpEditor_Editor("Pump", &pumpWork, 1, 0, 1);
     MenuInfo Heat_Info("Heat Power", 0, 0);    
-        MenuEditor<int> HeatEditor_Editor("Heat Power", &heatPower, 2, 0, 100);
+        MenuEditor<byte> HeatEditor_Editor("Heat Power", &heatPower, 2, 0, 100, resetHeat);
+    MenuInfo SetTemp_Info("Set temperature", 0, 0);    
+        MenuInfo SetTemp_back_Info("<-", 0, 0);
+        MenuInfo SetTempOn_Info("On/Off", 0, 0);    
+            MenuEditor<bool> SetTempOn_Editor("On/Off", &setTemperatureWork, 1, 0, 1);
+        MenuInfo SetTemperature_Info("Set temperature", 0, 0);    
+            MenuEditor<float> SetTemperature_Editor("Set temperature", &setTemperature, 5, 0, 110, saveConfig);
 MenuInfo Settings_Info("Settings", 0, 0);    
     MenuInfo Settings_back_Info("<-", 0, 0);
     MenuInfo SetTime_Info("Set Time", 0, 0);    
@@ -553,13 +687,13 @@ MenuInfo Settings_Info("Settings", 0, 0);
         MenuInfo Minute_Info("Minute", 0, 0);    
             MenuEditor<byte> MinuteEditor_Editor("Minute", &minute, 1, 0, 59, saveTime);
     MenuInfo Kp_Info("Kp", 0, 0);    
-        MenuEditor<float> KpEditor_Editor("Kp", &Kp, 0.1, 0, 100);
+        MenuEditor<float> KpEditor_Editor("Kp", &Kp, 0.1, 0, 100, saveConfig);
     MenuInfo Ki_Info("Ki", 0, 0);    
-        MenuEditor<float> KiEditor_Editor("Ki", &Ki, 0.1, 0, 100);
+        MenuEditor<float> KiEditor_Editor("Ki", &Ki, 0.001, 0, 100, saveConfig);
     MenuInfo Kd_Info("Kd", 0, 0);    
-        MenuEditor<float> KdEditor_Editor("Kd", &Kd, 0.1, 0, 100);
+        MenuEditor<float> KdEditor_Editor("Kd", &Kd, 0.001, 0, 100, saveConfig);
     MenuInfo ReverseEnc_Info("Reverse Encoder", 0, 0);    
-        MenuEditor<bool> ReverseEnc_Editor("Reverse Encoder", &reverseEncoder, 1, 0, 1);
+        MenuEditor<bool> ReverseEnc_Editor("Reverse Encoder", &reverseEncoder, 1, 0, 1, saveConfig);
 
 MenuItem* current = &Welcome_Info;
 
@@ -580,6 +714,8 @@ void zeroCross();
 void timeoutPump();
 void timeoutHeat();
 
+void setupEEPROM();
+
 void setup()
 {
   Serial.begin(115200);
@@ -590,24 +726,21 @@ void setup()
   lcd.begin();
 
   setupTemperature();
+  sensors.requestTemperatures();
 
   loadTime();
-  
-  tone(TonePin, 1000);
-  delay(100);
+
+  tone(TonePin, 1000, 200);
+  delay(200);
   noTone(TonePin);
+
+  loadConfig();
 
   pinMode(ZeroSensorPin, INPUT);
   attachInterrupt(ZeroSensorPin, zeroCross, RISING);
 
-  pinMode(HeatPin, OUTPUT);
-  digitalWrite(HeatPin, LOW);
-
   pinMode(PumpPin, OUTPUT);
   digitalWrite(PumpPin, LOW);
-
-  pinMode(PC13, OUTPUT);
-  digitalWrite(PC13, LOW);
 }
 
 void loop()
@@ -617,8 +750,7 @@ void loop()
 
   if (updateTime_.update())
   {
-    struct tm * tx;
-    tx = rt.getTime(NULL);
+    tm* tx = rt.getTime(NULL);
 
     if (tx->tm_min != minute)
     {
@@ -626,38 +758,39 @@ void loop()
     }
   }
 
-  if (tempTimer.update())
+  if (pumpWork)
   {
-//    sensors.requestTemperatures();
-//    temperature = sensors.getTempC(insideThermometer);
+    digitalWrite(PumpPin, HIGH);
   }
-
-  if(zeroOffsetTimer.update())
-  {
-    if (pumpPower > 0)
-    {
-      digitalWrite(PumpPin, HIGH);
-    }
-    if (heatPower > 0)
-    {
-      digitalWrite(HeatPin, HIGH);
-    }
-    pumpPowerTimer.start(map(pumpPower, 0, 100, 0, 10000));
-    heatPowerTimer.start(map(heatPower, 0, 100, 0, 10000));
-  }
-
-  if (heatPowerTimer.update())
-  {
-    digitalWrite(HeatPin, LOW);
-  }
-
-  if (pumpPowerTimer.update())
+  else
   {
     digitalWrite(PumpPin, LOW);
   }
 
+  if (temperatureTimer.update())
+  {
+    temperature = sensors.getTempC(insideThermometer);
+
+    Serial.print(temperature); Serial.print(" ");
+    Serial.print(setTemperature); Serial.print(" ");
+    Serial.print(heatOutput); Serial.print(" ");
+    Serial.print(heatPower); Serial.print(" ");
+    Serial.println("");
+
+    temperatureTimer.start(750 / (1 << (12 - resolution)));
+    
+    sensors.requestTemperatures();
+  }
+
+  if (setTemperatureWork && regulatorTimer.update())
+  {
+    heatOutput = heatRegulator.update(temperature, setTemperature);
+    int ho = int(heatOutput);
+    heatPower = constrain(ho, 0, 100);
+  }
+
   if (current)
-    dataChanged |= current->Update();  
+    dataChanged |= current->Update();
 
   if (dataChanged)
   {
@@ -672,7 +805,7 @@ void loop()
 
 void zeroCross()
 {
-  zeroOffsetTimer.start(zeroOffset * 100);
+  heat.update();
 }
 
 void setupTemperature()
@@ -687,8 +820,15 @@ void setupTemperature()
   temperatureSensorWork = true;
 
   sensors.setWaitForConversion(false);
-  
-  sensors.setResolution(insideThermometer, 12);
+  sensors.requestTemperatures();
+  temperatureTimer.start(750 / (1 << (12 - resolution)));
+
+  sensors.setResolution(insideThermometer, resolution);
+}
+
+void resetHeat()
+{
+  heat.reset();
 }
 
 void downHandler(void*)
@@ -696,7 +836,10 @@ void downHandler(void*)
 // button handler
 do{
 // if (current == &Welcome_Info) {}
-// if (current == &Program_Info) {}
+if (current == &Program_Info) { current = &Program_back_Info; break; }    
+    if (current == &Program_back_Info) { current = &Program_Info; break; }
+    if (current == &RunProgram_Info) { current = &Program_Info; break; }
+    if (current == &NewProgram_Info) { current = &Program_Info; break; }
 if (current == &Manual_Info) { current = &Manual_back_Info; break; }    
     if (current == &Manual_back_Info) { current = &Manual_Info; break; }
     if (current == &Temperature_Info) { current = &TemperatureViewer_Viewer; break; }    
@@ -707,9 +850,15 @@ if (current == &Manual_Info) { current = &Manual_back_Info; break; }
         if (current == &PumpEditor_Editor) { current = &Pump_Info; break; }
     if (current == &Heat_Info) { current = &HeatEditor_Editor; break; }    
         if (current == &HeatEditor_Editor) { current = &Heat_Info; break; }
+    if (current == &SetTemp_Info) { current = &SetTemp_back_Info; break; }    
+        if (current == &SetTemp_back_Info) { current = &SetTemp_Info; break; }
+        if (current == &SetTempOn_Info) { current = &SetTempOn_Editor; break; }    
+            if (current == &SetTempOn_Editor) { current = &SetTempOn_Info; break; }
+        if (current == &SetTemperature_Info) { current = &SetTemperature_Editor; break; }    
+            if (current == &SetTemperature_Editor) { current = &SetTemperature_Info; break; }
 if (current == &Settings_Info) { current = &Settings_back_Info; break; }    
     if (current == &Settings_back_Info) { current = &Settings_Info; break; }
-    if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    
+    if (current == &SetTime_Info) { current = &SetTime_back_Info; break; }    
         if (current == &SetTime_back_Info) { current = &SetTime_Info; break; }
         if (current == &Year_Info) { current = &YearEditor_Editor; break; }    
             if (current == &YearEditor_Editor) { current = &Year_Info; break; }
@@ -740,7 +889,10 @@ void plus(void*)
 // up handler
 do{
 if (current == &Welcome_Info) { current = &Program_Info; break; }
-if (current == &Program_Info) { current = &Manual_Info; break; }
+if (current == &Program_Info) { current = &Manual_Info; break; }    
+    if (current == &Program_back_Info) { current = &RunProgram_Info; break; }
+    if (current == &RunProgram_Info) { current = &NewProgram_Info; break; }
+    if (current == &NewProgram_Info) { break; }
 if (current == &Manual_Info) { current = &Settings_Info; break; }    
     if (current == &Manual_back_Info) { current = &Temperature_Info; break; }
     if (current == &Temperature_Info) { current = &TempSensorWork_Info; break; }    
@@ -749,8 +901,14 @@ if (current == &Manual_Info) { current = &Settings_Info; break; }
         if (current == &TempSensorWorkViewer_Viewer) { break; }
     if (current == &Pump_Info) { current = &Heat_Info; break; }    
         if (current == &PumpEditor_Editor) { break; }
-    if (current == &Heat_Info) { break; }    
+    if (current == &Heat_Info) { current = &SetTemp_Info; break; }    
         if (current == &HeatEditor_Editor) { break; }
+    if (current == &SetTemp_Info) { break; }    
+        if (current == &SetTemp_back_Info) { current = &SetTempOn_Info; break; }
+        if (current == &SetTempOn_Info) { current = &SetTemperature_Info; break; }    
+            if (current == &SetTempOn_Editor) { break; }
+        if (current == &SetTemperature_Info) { break; }    
+            if (current == &SetTemperature_Editor) { break; }
 if (current == &Settings_Info) { break; }    
     if (current == &Settings_back_Info) { current = &SetTime_Info; break; }
     if (current == &SetTime_Info) { current = &Kp_Info; break; }    
@@ -785,7 +943,10 @@ void minus(void*)
 // down handler
 do{
 if (current == &Welcome_Info) { break; }
-if (current == &Program_Info) { current = &Welcome_Info; break; }
+if (current == &Program_Info) { current = &Welcome_Info; break; }    
+    if (current == &Program_back_Info) { break; }
+    if (current == &RunProgram_Info) { current = &Program_back_Info; break; }
+    if (current == &NewProgram_Info) { current = &RunProgram_Info; break; }
 if (current == &Manual_Info) { current = &Program_Info; break; }    
     if (current == &Manual_back_Info) { break; }
     if (current == &Temperature_Info) { current = &Manual_back_Info; break; }    
@@ -796,6 +957,12 @@ if (current == &Manual_Info) { current = &Program_Info; break; }
         if (current == &PumpEditor_Editor) { break; }
     if (current == &Heat_Info) { current = &Pump_Info; break; }    
         if (current == &HeatEditor_Editor) { break; }
+    if (current == &SetTemp_Info) { current = &Heat_Info; break; }    
+        if (current == &SetTemp_back_Info) { break; }
+        if (current == &SetTempOn_Info) { current = &SetTemp_back_Info; break; }    
+            if (current == &SetTempOn_Editor) { break; }
+        if (current == &SetTemperature_Info) { current = &SetTempOn_Info; break; }    
+            if (current == &SetTemperature_Editor) { break; }
 if (current == &Settings_Info) { current = &Manual_Info; break; }    
     if (current == &Settings_back_Info) { break; }
     if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    
@@ -865,5 +1032,47 @@ void loadTime()
     day     = tx->tm_mday;
     month   = tx->tm_mon;
     year    = 1900 + tx->tm_year;
+}
+
+#define CONFIG_START 32
+ 
+typedef struct
+{
+  float kp;
+  float ki;
+  float kd;
+  bool re;
+  float st;  
+} configuration_type;
+ 
+int loadConfig() {
+  configuration_type CONFIGURATION;
+  for (unsigned int i=0; i<sizeof(CONFIGURATION); i++)
+  {
+    *((char*)&CONFIGURATION + i) = EEPROM.read(CONFIG_START + i);
+  }
+  Kp = CONFIGURATION.kp;
+  Ki = CONFIGURATION.ki;
+  Kd = CONFIGURATION.kd;
+  reverseEncoder = CONFIGURATION.re;
+  setTemperature = CONFIGURATION.st;
+  
+  Serial.println("configuration loaded");
+  return 1;
+}
+ 
+void saveConfig() {
+  configuration_type CONFIGURATION = {
+    Kp,
+    Ki,
+    Kd,
+    reverseEncoder,
+    setTemperature,
+  };
+  
+  for (unsigned int i=0; i<sizeof(CONFIGURATION); i++)
+  {
+    EEPROM.write(CONFIG_START + i, *((char*)&CONFIGURATION + i));
+  }
 }
 
