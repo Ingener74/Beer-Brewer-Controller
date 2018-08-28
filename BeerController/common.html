@@ -121,9 +121,7 @@ if (current == &{{item_suffix(name, m.id, m.type)}}) { break; }
 {%- endmacro %}
 
 {#-----------------------------------------------------------------#}
-
-{{- create_menu("Main", menu) }}
-
+{%- macro make_btn_handler(menu) %}
 // button handler
 do{
 	{%- for m in menu %}
@@ -137,13 +135,20 @@ if (current == &{{item_suffix(name, m.id, m.type)}}) { current = &{{get_child_me
 		{%- endif %}
 	{%- endfor %}
 }while(false);
+{%- endmacro %}
 
+{#-----------------------------------------------------------------#}
+{%- macro make_up_handlers(menu) %}
 // up handler
 do{
 {{- make_up_handler("", menu) }}
 }while(false);
+{%- endmacro %}
 
+{#-----------------------------------------------------------------#}
+{%- macro make_dwn_handlers(menu) %}
 // down handler
 do{
 {{- make_down_handler("", menu) }}
 }while(false);
+{%- endmacro %}

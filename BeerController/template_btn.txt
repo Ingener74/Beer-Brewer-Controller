@@ -1,0 +1,3 @@
+{% import 'common.html' as t %}
+
+{{- t.make_btn_handler(menu) }}

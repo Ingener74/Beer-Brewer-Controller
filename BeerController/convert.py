@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import json
-from jinja2 import Template
+from jinja2 import Template, Environment, FileSystemLoader
 
 id_counter = 0
 
@@ -16,11 +16,15 @@ def reset_counter():
 	return ''
 
 def main(data, template, output_file):
-	t = Template(open(template).read())
+	env = Environment()
+	env.loader = FileSystemLoader('.')
+	t = env.get_template(template)
 	t.globals['counter'] = counter
 	t.globals['reset_counter'] = reset_counter
 	open(output_file, 'w').write(t.render(json.load(open(data))))
 
-
 if __name__ == '__main__':
-    main('menu.json', 'template.txt', 'Menu.h')
+    main('menu.json', 'template_menu.txt', 'Menu.h')
+    main('menu.json', 'template_btn.txt', 'BtnHandlers.h')
+    main('menu.json', 'template_up.txt', 'UpHandlers.h')
+    main('menu.json', 'template_dwn.txt', 'DwnHandlers.h')

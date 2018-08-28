@@ -1,16 +1,23 @@
-// ds18b20
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-// i2c
 #include <Wire.h>
 
-// lcd1602
 #include <LiquidCrystal_I2C.h>
 
 #include <RTClock.h>
 
-#include <EEPROM.h>
+#include <PID_v1.h>
+
+// https://www.youtube.com/watch?v=IenFIIMIbyk - cool menu
+
+/*
+
+* Программный режим работы
+* Редактирование программ
+* Сохранение и загрузка программ
+* 
+*/
 
 ///////////////////////////////////////////////////////////////////////
 struct MyTimer
@@ -38,6 +45,7 @@ struct MyTimer
 };
 
 ///////////////////////////////////////////////////////////////////////
+/*
 struct SingleMicrosecondTimer
 {
   SingleMicrosecondTimer()
@@ -74,7 +82,7 @@ struct SingleMicrosecondTimer
   long delay;
   unsigned long prevMicrosecond;
 };
-
+*/
 ///////////////////////////////////////////////////////////////////////
 struct SingleMillisecondTimer
 {
@@ -118,13 +126,14 @@ struct Button
 {
   typedef void (*Handler)(void*);
 
-  void init(const int pinNumber_, Handler down_, Handler up_)
+  void init(const int pinNumber_, Handler down_, Handler up_, byte* bounceDelay = 0)
   {
     pinNumber = pinNumber_;
     down = down_;
     up = up_;
     pushed = false;
     userData = 0;
+    _bounceDelay = bounceDelay;
     
     pinMode(pinNumber, INPUT_PULLUP);
     digitalWrite(pinNumber, HIGH);
@@ -135,14 +144,25 @@ struct Button
     if (!digitalRead(pinNumber) && !pushed)
     {
       pushed = true;
-      if (down)
-        down(userData);
+      if (_bounceDelay == 0)
+      {
+        if (down)
+          down(userData);
+      }
+      else
+      {
+        _bounceTimer.start(*_bounceDelay);
+      }
     }
     if (digitalRead(pinNumber) && pushed)
     {
       pushed = false;
       if (up)
         up(userData);
+    }
+    if (_bounceDelay != 0 && pushed && _bounceTimer.update() && down)
+    {
+      down(userData);
     }
   }
 
@@ -156,6 +176,8 @@ struct Button
   Handler up;
   bool pushed;
   void* userData;
+  byte* _bounceDelay;
+  SingleMillisecondTimer _bounceTimer;
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -208,8 +230,9 @@ struct RotaryEncoder
 
 struct Line
 {
-  virtual const char* str() = 0;
-  virtual bool update() = 0;
+  virtual const char* str() {}
+  virtual void print(LiquidCrystal_I2C& lcd) {}
+  virtual bool update() {}
 };
 
 struct IntTimeLine: Line
@@ -302,7 +325,12 @@ struct MenuInfo: MenuItem
     else if (type == MESSAGE_AND_LINE && line2 != 0)
     {
       lcd.setCursor(0, 1);
-      lcd.print(line2->str());
+      const char* s = line2->str();
+      if (s)
+      {
+        lcd.print(s);
+      }
+      line2->print(lcd);
     }
   
     return true;
@@ -352,31 +380,6 @@ struct MenuViewer: MenuInfo
 };
 
 ///////////////////////////////////////////////////////////////////////
-// struct MenuItemViewerSymbols: MenuItem
-// {
-//   MenuItemViewerSymbols& init(
-//     MenuItem** current_, 
-//     byte min_)
-//   {
-//     MenuItem::init(0, 0, 0, 0, current_);
-//     min = min_;
-//     return *this;
-//   }
-
-//   virtual void Print(LiquidCrystal_I2C& lcd)
-//   {
-//     lcd.setCursor(0, 0);    
-//     for (byte i = 0; i < 16; ++i)
-//       lcd.write(byte(min + i));
-
-//     lcd.setCursor(0, 1);
-//     for (byte i = 0; i < 16; ++i)
-//       lcd.write(byte(min + 16 + i));
-//   }
-//   byte min;
-// };
-
-///////////////////////////////////////////////////////////////////////
 template<typename T>
 struct MenuEditor: MenuInfo
 {
@@ -388,8 +391,9 @@ struct MenuEditor: MenuInfo
     T step_,
     T min_,
     T max_, 
-    Handler handler_ = 0)
-    : MenuInfo(message_, 0, 0)
+    Handler handler_ = 0,
+    Line* line2 = 0)
+    : MenuInfo(message_, 0, line2)
     , value(value_)
     , step(step_)
     , handler(handler_)
@@ -470,7 +474,7 @@ bool MenuEditor<float>::Print(LiquidCrystal_I2C& lcd)
   {
     return false;
   }
-  lcd.print(*value, 3);
+  lcd.print(*value, 4);
 }
 
 template<>
@@ -500,50 +504,20 @@ bool MenuEditor<T>::Print(LiquidCrystal_I2C& lcd)
   lcd.setCursor(0, 0);
   lcd.print(message1);
   lcd.setCursor(0, 1);
-  lcd.print("= ");
-  if (value == 0)
+  if (line2)
   {
-    return false;
+    lcd.print(line2->str());
   }
-  lcd.print(*value);
+  else
+  {
+    lcd.print("= ");
+    if (value == 0)
+    {
+      return false;
+    }
+    lcd.print(*value);
+  }
 }
-///////////////////////////////////////////////////////////////////////
-struct PID
-{
-  PID(float* Kp, float* Ki, float* Kd)
-    : Kp(Kp)
-    , Ki(Ki)
-    , Kd(Kd)
-    , prevIntegral(0)
-    , prevError(0)
-  {
-  }
-
-  float update(float real, float required)
-  {
-    float error = required - real;
-
-    float result = 0;
-    result += (*Kp) * error;
-
-    float integral = prevIntegral + (*Ki) * error;
-    prevIntegral = integral;
-    result += integral;
-
-    result += (*Kd) * (error - prevError);
-    prevError = error;
-    
-    return result;
-  }
-
-  float* Kp;
-  float* Ki;
-  float* Kd;
-
-  float prevIntegral;
-  
-  float prevError;
-};
 
 ///////////////////////////////////////////////////////////////////////
 struct PowerControl
@@ -581,13 +555,406 @@ struct PowerControl
 };
 
 ///////////////////////////////////////////////////////////////////////
+struct Updater
+{
+  virtual void update() = 0;
+};
+
+template<typename T>
+struct Var: Updater
+{
+  typedef void (*Handler)(void*, T*);
+  Var(const T& defaultValue = {}, Handler handler = 0)
+    : value(defaultValue)
+    , prevValue(defaultValue)
+    , _handler(handler)
+  {
+  }
+  void update()
+  {
+    if (value != prevValue && _handler)
+    {
+      _handler(this, &value);
+      prevValue = value;
+    }
+  }
+
+  T* ptr()
+  {
+    return &value;
+  }
+
+  T value;
+  T prevValue;
+  Handler _handler;
+};
+
+///////////////////////////////////////////////////////////////////////
+const int NumberOfPrograms = 20;
+const int MaxNumberOfSteps = 20;
+
+struct ProgramStep
+{
+  byte opCode;
+  union 
+  {
+    byte temperature;
+    byte minutes;
+  };
+};
+
+struct Interpreter
+{
+  enum Command
+  {
+    NOP,        // 0
+    HEAT,       // 1
+    COLD,       // 2
+    WAIT,       // 3
+    PUMP_ON ,   // 4
+    PUMP_OFF,   // 5
+    OP_CODE_COUNT,
+  };
+
+  static const char* operations[OP_CODE_COUNT];
+
+  Interpreter(
+    ProgramStep* programs,
+    byte* program,
+    byte* step,
+    double* temperature,
+    double* setTemperature,
+    bool* heatOnOff,
+    bool* pumpOnOff,
+    bool* runProgram,
+    tm* currentTime
+    )
+    : _programs(programs)
+    , _step(step)
+    , _program(program)
+    , _temperature(temperature)
+    , _setTemperature(setTemperature)
+    , _heatOnOff(heatOnOff)
+    , _pumpOnOff(pumpOnOff)
+    , _runProgram(runProgram)
+    , _currentTime(currentTime)
+  {
+  }
+  
+  void update()
+  {
+    switch (_programs[*_program * MaxNumberOfSteps + *_step].opCode)
+    {
+      case NOP:
+      {
+        next();
+        break;      
+      }
+      case HEAT:
+      {
+        float t = _programs[*_program * MaxNumberOfSteps + *_step].temperature;
+        (*_heatOnOff) = true;
+        (*_setTemperature) = t;
+        if ((*_temperature) >= t)
+        {
+          next();
+        }
+        break;
+      }
+      case COLD:
+      {
+        float t = _programs[*_program * MaxNumberOfSteps + *_step].temperature;
+        (*_heatOnOff) = true;
+        if ((*_temperature) < t)
+        {
+          next();
+        }
+        break;
+      }
+      case WAIT:
+      {
+        if (
+          _currentTime->tm_min  == _waitTime.tm_min  &&
+          _currentTime->tm_hour == _waitTime.tm_hour &&
+          _currentTime->tm_mday == _waitTime.tm_mday &&
+          _currentTime->tm_mon  == _waitTime.tm_mon  &&
+          _currentTime->tm_year == _waitTime.tm_year &&
+          _currentTime->tm_sec  == _waitTime.tm_sec
+        ) {
+          next();
+        }
+        break;
+      }
+      case PUMP_ON:
+      {
+        (*_pumpOnOff) = true;
+        next();
+        break;
+      }
+      case PUMP_OFF:
+      {
+        (*_pumpOnOff) = false;
+        next();
+        break;
+      }
+    }
+  }
+
+  void next()
+  {
+    (*_step)++;
+    if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == WAIT)
+    {
+      _waitTime = *_currentTime;
+      _waitTime.tm_min += _programs[*_program * MaxNumberOfSteps + *_step].minutes;
+      mktime(&_waitTime);
+    }
+    if ((*_step) >= MaxNumberOfSteps)
+    {
+      (*_runProgram) = false;
+    }
+  }
+
+  ProgramStep* _programs;
+  byte* _step;
+  byte* _program;
+
+  double* _temperature;
+  double* _setTemperature;
+  bool* _heatOnOff;
+  bool* _pumpOnOff;
+  tm* _currentTime;
+  tm _waitTime;
+
+  bool* _runProgram;
+};
+
+const char* Interpreter::operations[OP_CODE_COUNT] = {
+  "Nop", 
+  "Heat", 
+  "Cold", 
+  "Wait", 
+  "Pump On", 
+  "Pump Off", 
+};
+
+///////////////////////////////////////////////////////////////////////
+struct OperationsLine: Line
+{
+  OperationsLine(byte* operation)
+    : _operation(operation)
+  {
+  }
+
+  const char* str()
+  {
+    snprintf(buffer, sizeof(buffer), "%s", Interpreter::operations[*_operation]);
+    return buffer;
+  }
+
+  bool update()
+  {
+    return timer.update();
+  }
+
+  byte* _operation;
+  char buffer[17];
+  MyTimer timer;  
+};
+
+///////////////////////////////////////////////////////////////////////
+struct RunProgramLine: Line
+{
+  RunProgramLine(
+    ProgramStep* programs,
+    bool* runProgram,
+    byte* program,
+    byte* step,
+    double* temperature
+    )
+    : _programs(programs)
+    , _runProgram(runProgram)
+    , _program(program)
+    , _step(step)
+    , _temperature(temperature)
+  {
+  }
+
+  const char* str()
+  {
+    return 0;
+  }
+
+  void updateBuffer()
+  {
+    char opcode[16];
+    snprintf(opcode, sizeof(opcode), "%s", Interpreter::operations[_programs[*_program * MaxNumberOfSteps + *_step].opCode]);
+
+    char progPrm[32];
+    if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::WAIT)
+    {
+      // TODO сколько осталось минут показывать
+      char fromBuffer[32];
+      snprintf("%d:%d", );
+      char toBuffer[32];
+      snprintf("%d:%d", );
+      snprintf(progPrm, sizeof(progPrm), "%s -> %s", fromBuffer, toBuffer); // _programs[*_program * MaxNumberOfSteps + *_step].minutes
+    }
+    else if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::HEAT)
+    {
+      snprintf(progPrm, sizeof(progPrm), "%.1f -> %d", *_temperature, _programs[*_program * MaxNumberOfSteps + *_step].temperature);
+    }
+    else if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::COLD)
+    {
+      snprintf(progPrm, sizeof(progPrm), "%d <- %.1f", _programs[*_program * MaxNumberOfSteps + *_step].temperature, *_temperature);
+    }
+
+    char onOff[4];
+    snprintf(onOff, sizeof(onOff), "%s", (*_runProgram) ? "On" : "Off");
+
+    // TODO выводить всегда мощьность и включен или выключен насос и всегда показывать температуру
+    snprintf(buffer, sizeof(buffer), "   Program %d(%s), Step %d, %s, %s   ", *_program, onOff, *_step, opcode, progPrm);
+  }
+
+  void print(LiquidCrystal_I2C& lcd) {
+    updateBuffer();
+    for (byte i = 0; i < 16; ++i)
+    {
+      lcd.setCursor(i, 1);
+      lcd.write(buffer[cp + i]);
+    }
+  }
+
+  bool update()
+  {
+    bool u = timer.update();
+    if (u)
+    {
+      cp++;
+      if (cp >= size() - 16)
+      {
+        cp = 0;
+      }
+    }
+    return u;
+  }
+  
+  byte size()
+  {
+    for (uint8 i = 0; i < sizeof(buffer); ++i)
+    {
+      if (buffer[i] == 0)
+      {
+        return i;
+      }
+    }
+  }
+  
+  char buffer[128];
+  byte bufferStart;
+  MyTimer timer;
+
+  byte cp;
+
+  ProgramStep* _programs;
+  bool* _runProgram;
+  byte* _program;
+  byte* _step;
+  double* _temperature;
+};
+
+///////////////////////////////////////////////////////////////////////
+struct ViewProgramLine: Line
+{
+  ViewProgramLine(
+    ProgramStep* programs,
+    byte* program
+    )
+    : _programs(programs)
+    , _program(program)
+  {
+  }
+
+  void updateBuffer()
+  {
+    char steps[MaxNumberOfSteps][32];
+    for (uint8 i = 0; i < MaxNumberOfSteps; ++i)
+    {
+      if (false) {}
+      else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::WAIT)
+        snprintf(&steps[i][0], sizeof(steps[i]), "%d:Wait %d min", i, _programs[*_program * MaxNumberOfSteps + i].minutes);
+      else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::HEAT)
+        snprintf(&steps[i][0], sizeof(steps[i]), "%d:Heat %d%cC", i, _programs[*_program * MaxNumberOfSteps + i].temperature, 0xDF);
+      else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::COLD)
+        snprintf(&steps[i][0], sizeof(steps[i]), "%d:Cold %d%cC", i, _programs[*_program * MaxNumberOfSteps + i].temperature, 0xDF);
+      else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::PUMP_ON)
+        snprintf(&steps[i][0], sizeof(steps[i]), "%d:Pump On", i);
+      else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::PUMP_OFF)
+        snprintf(&steps[i][0], sizeof(steps[i]), "%d:Pump Off", i);
+      else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::NOP)
+        snprintf(&steps[i][0], sizeof(steps[i]), "%d", i);
+    }
+
+    snprintf(buffer, sizeof(buffer), "   %s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->%s->   ", 
+      steps[ 0], steps[ 1], steps[ 2], steps[ 3], steps[ 4], 
+      steps[ 5], steps[ 6], steps[ 7], steps[ 8], steps[ 9], 
+      steps[10], steps[11], steps[12], steps[13], steps[14], 
+      steps[15], steps[16], steps[17], steps[18], steps[19]
+      );
+  }
+
+  void print(LiquidCrystal_I2C& lcd) {
+    updateBuffer();
+    for (byte i = 0; i < 16; ++i)
+    {
+      lcd.setCursor(i, 1);
+      lcd.write(buffer[cp + i]);
+    }
+  }
+
+  bool update()
+  {
+    bool u = timer.update();
+    if (u)
+    {
+      cp++;
+      if (cp >= size() - 16)
+      {
+        cp = 0;
+      }
+    }
+    return u;
+  }
+
+  byte size()
+  {
+    for (uint16 i = 0; i < 512; ++i)
+    {
+      if (buffer[i] == 0)
+      {
+        return i;
+      }
+    }
+  }
+  
+  char buffer[512];
+  uint16 bufferStart;
+  MyTimer timer;
+
+  byte cp;
+
+  ProgramStep* _programs;
+  byte* _program;
+};
+
+///////////////////////////////////////////////////////////////////////
 
 const int LcdWidth = 16;
 const int LcdHeight = 2;
 
-const int RePin1 = PB10;
+const int RePin1 = PB8;
 const int RePin2 = PB1;
-const int ReButtonPin = PB11;
+const int ReButtonPin = PB9;
 
 const int ZeroSensorPin = PA4;
 const int PumpPin = PA3;
@@ -620,7 +987,7 @@ void loadTime();
 MyTimer updateTime_;
 
 // Temperature
-float temperature = 0.0;
+double temperature = 0.0;
 bool temperatureSensorWork = false;
 SingleMillisecondTimer temperatureTimer;
 
@@ -633,72 +1000,130 @@ byte heatPower = 0;
 PowerControl heat(HeatPin, &heatPower);
 void resetHeat();
 
-bool setTemperatureWork = false;
-float setTemperature = 0;
+void onSetTempWorkUpdatet(void*, bool*);
+Var<bool> setTempWork{false, onSetTempWorkUpdatet};
+double setTemperature = 0;
 
 float Kp = 0;
 float Ki = 0;
 float Kd = 0;
 
-PID heatRegulator(&Kp, &Ki, &Kd);
+void checkAndUpdatePID();
+
+double heatOutput = 0.f;
+
+PID heatReg(&temperature, &heatOutput, &setTemperature, Kp, Ki, Kd, DIRECT);
 MyTimer regulatorTimer(100);
 
-float heatOutput = 0.f;
 
 bool reverseEncoder = false;
 
+void onProgram(void*, byte*);
+Var<byte> program(0, onProgram);
 
-int loadConfig();
+void onProgramStep(void*, byte*);
+Var<byte> programStep(0, onProgramStep);
+void onOperation(void*, byte*);
+Var<byte> operation(0, onOperation);
+ProgramStep programs[NumberOfPrograms * MaxNumberOfSteps];
+void onRunProgram(void*,bool* value);
+Var<bool> runProgram(false, onRunProgram);
+tm currentTime;
+Interpreter interpreter(
+  programs, 
+  program.ptr(), 
+  programStep.ptr(), 
+  &temperature, 
+  &setTemperature, 
+  setTempWork.ptr(), 
+  &pumpWork, 
+  runProgram.ptr(), 
+  &currentTime);
+
+RunProgramLine runProgramLine(programs, runProgram.ptr(), program.ptr(), programStep.ptr(), &temperature);
+ViewProgramLine viewProgramLine(programs, program.ptr());
+
+OperationsLine opCodeLine(operation.ptr());
+
+void onClearProgram(void*, bool* value);
+Var<bool> clearProgram(false, onClearProgram);
+
+void onClearAllProgram(void*, bool* value);
+Var<bool> clearAllProgram(false, onClearAllProgram);
+
+void onProgramTempUpdate(void*, byte* value);
+Var<byte> programTemp(20, onProgramTempUpdate);
+
+void onProgramMinutesUpdate(void*, byte* value);
+Var<byte> programMinutes(0, onProgramMinutesUpdate);
+
+Var<byte> bounceDelay(1);
+
+void onSavePrograms(void*, bool*);
+Var<bool> savePrograms(false, onSavePrograms);
+
+void onSaveSettings(void*, bool*);
+Var<bool> saveSettings(false, onSaveSettings);
+
+void onOperation(void*, byte*)
+{
+  programs[program.value * MaxNumberOfSteps + programStep.value].opCode = operation.value;
+}
+
+void onProgramTempUpdate(void*, byte* value)
+{
+  programs[program.value * MaxNumberOfSteps + programStep.value].temperature = programTemp.value;
+}
+
+void onProgramMinutesUpdate(void*, byte* value)
+{
+  programs[program.value * MaxNumberOfSteps + programStep.value].minutes = programMinutes.value;
+}
+
+void onProgramStep(void*, byte* s)
+{
+  programTemp.value = programs[program.value * MaxNumberOfSteps + programStep.value].temperature;
+  programMinutes.value = programs[program.value * MaxNumberOfSteps + programStep.value].minutes;
+  operation.value = programs[program.value * MaxNumberOfSteps + programStep.value].opCode;
+  runProgramLine.cp = 0;
+}
+
+      /*
+      { "id": "Test", "type": "info", "args": "\"Test\", 0, 0", "menu": [
+        { "id": "Test", "type": "edit", "ctype": "bool", "args": "\"Test\", testBool.ptr(), 1, 0, 1" }
+      ]},
+      */
+void onTest(void*, bool*);
+Var<bool> testBool(false, onTest);
+
+Updater* updaters[] = {
+  &program,
+  &setTempWork,
+  &programStep,
+  &operation,
+  &runProgram,
+  &clearProgram,
+  &clearAllProgram,
+  &programTemp,
+  &programMinutes,
+  &bounceDelay,
+  &savePrograms,
+  &saveSettings,
+  &testBool,  
+  0
+};
+
+void loadConfig();
 void saveConfig();
 
-MenuInfo Welcome_Info("Hello, Brewer", 0, &timeLine);
-MenuInfo Program_Info("Program", 0, 0);    
-    MenuInfo Program_back_Info("<-", 0, 0);
-    MenuInfo RunProgram_Info("Run program", 0, 0);
-    MenuInfo NewProgram_Info("New program", 0, 0);
-MenuInfo Manual_Info("Manual Control", 0, 0);    
-    MenuInfo Manual_back_Info("<-", 0, 0);
-    MenuInfo Temperature_Info("Temperature", 0, 0);    
-        MenuViewer<float> TemperatureViewer_Viewer("Temperature", &temperature);
-    MenuInfo TempSensorWork_Info("Temp Sensor Work", 0, 0);    
-        MenuViewer<bool> TempSensorWorkViewer_Viewer("Temp Sensor Work", &temperatureSensorWork);
-    MenuInfo Pump_Info("Pump", 0, 0);    
-        MenuEditor<bool> PumpEditor_Editor("Pump", &pumpWork, 1, 0, 1);
-    MenuInfo Heat_Info("Heat Power", 0, 0);    
-        MenuEditor<byte> HeatEditor_Editor("Heat Power", &heatPower, 2, 0, 100, resetHeat);
-    MenuInfo SetTemp_Info("Set temperature", 0, 0);    
-        MenuInfo SetTemp_back_Info("<-", 0, 0);
-        MenuInfo SetTempOn_Info("On/Off", 0, 0);    
-            MenuEditor<bool> SetTempOn_Editor("On/Off", &setTemperatureWork, 1, 0, 1);
-        MenuInfo SetTemperature_Info("Set temperature", 0, 0);    
-            MenuEditor<float> SetTemperature_Editor("Set temperature", &setTemperature, 5, 0, 110, saveConfig);
-MenuInfo Settings_Info("Settings", 0, 0);    
-    MenuInfo Settings_back_Info("<-", 0, 0);
-    MenuInfo SetTime_Info("Set Time", 0, 0);    
-        MenuInfo SetTime_back_Info("<-", 0, 0);
-        MenuInfo Year_Info("Year", 0, 0);    
-            MenuEditor<int> YearEditor_Editor("Year", &year, 1, 1970, 2100, saveTime);
-        MenuInfo Month_Info("Month", 0, 0);    
-            MenuEditor<byte> MonthEditor_Editor("Month", &month, 1, 1, 12, saveTime);
-        MenuInfo Day_Info("Day", 0, 0);    
-            MenuEditor<byte> DayEditor_Editor("Day", &day, 1, 0, 31, saveTime);
-        MenuInfo Hour_Info("Hour", 0, 0);    
-            MenuEditor<byte> HourEditor_Editor("Hour", &hour, 1, 0, 23, saveTime);
-        MenuInfo Minute_Info("Minute", 0, 0);    
-            MenuEditor<byte> MinuteEditor_Editor("Minute", &minute, 1, 0, 59, saveTime);
-    MenuInfo Kp_Info("Kp", 0, 0);    
-        MenuEditor<float> KpEditor_Editor("Kp", &Kp, 0.1, 0, 100, saveConfig);
-    MenuInfo Ki_Info("Ki", 0, 0);    
-        MenuEditor<float> KiEditor_Editor("Ki", &Ki, 0.001, 0, 100, saveConfig);
-    MenuInfo Kd_Info("Kd", 0, 0);    
-        MenuEditor<float> KdEditor_Editor("Kd", &Kd, 0.001, 0, 100, saveConfig);
-    MenuInfo ReverseEnc_Info("Reverse Encoder", 0, 0);    
-        MenuEditor<bool> ReverseEnc_Editor("Reverse Encoder", &reverseEncoder, 1, 0, 1, saveConfig);
+#include "Menu.h"
 
 MenuItem* current = &Welcome_Info;
 
 Button button;
 RotaryEncoder encoder;
+
+HardWire i2c(2, I2C_FAST_MODE);
 
 void downHandler(void*);
 void plus(void*);
@@ -714,13 +1139,17 @@ void zeroCross();
 void timeoutPump();
 void timeoutHeat();
 
-void setupEEPROM();
+void updateAll();
+void updateCurrentTime();
 
 void setup()
 {
   Serial.begin(115200);
 
-  button.init(ReButtonPin, downHandler, 0);
+  i2c.begin();  
+  loadConfig();
+
+  button.init(ReButtonPin, downHandler, 0, bounceDelay.ptr());
   encoder.init(RePin1, RePin2, plusHandler, minusHandler);
 
   lcd.begin();
@@ -728,23 +1157,31 @@ void setup()
   setupTemperature();
   sensors.requestTemperatures();
 
+  heatReg.SetOutputLimits(0, 100);
+  heatReg.SetMode(AUTOMATIC);
+
   loadTime();
 
   tone(TonePin, 1000, 200);
   delay(200);
   noTone(TonePin);
 
-  loadConfig();
-
   pinMode(ZeroSensorPin, INPUT);
   attachInterrupt(ZeroSensorPin, zeroCross, RISING);
 
   pinMode(PumpPin, OUTPUT);
   digitalWrite(PumpPin, LOW);
+
+  onProgramStep(0, 0);
 }
 
 void loop()
 {  
+  updateAll();
+  checkAndUpdatePID();
+
+  updateCurrentTime();
+
   button.update();
   encoder.update();
 
@@ -782,11 +1219,15 @@ void loop()
     sensors.requestTemperatures();
   }
 
-  if (setTemperatureWork && regulatorTimer.update())
+  if (setTempWork.value && regulatorTimer.update())
   {
-    heatOutput = heatRegulator.update(temperature, setTemperature);
-    int ho = int(heatOutput);
-    heatPower = constrain(ho, 0, 100);
+    heatReg.Compute();
+    heatPower = byte(heatOutput);
+  }
+
+  if (runProgram.value)
+  {
+    interpreter.update();
   }
 
   if (current)
@@ -803,13 +1244,11 @@ void loop()
  }
 }
 
-void zeroCross()
-{
+void zeroCross() {
   heat.update();
 }
 
-void setupTemperature()
-{
+void setupTemperature() {
   sensors.begin();
 
   if (!sensors.getAddress(insideThermometer, 0))
@@ -826,190 +1265,48 @@ void setupTemperature()
   sensors.setResolution(insideThermometer, resolution);
 }
 
-void resetHeat()
-{
+void resetHeat() {
   heat.reset();
 }
 
-void downHandler(void*)
-{
-// button handler
-do{
-// if (current == &Welcome_Info) {}
-if (current == &Program_Info) { current = &Program_back_Info; break; }    
-    if (current == &Program_back_Info) { current = &Program_Info; break; }
-    if (current == &RunProgram_Info) { current = &Program_Info; break; }
-    if (current == &NewProgram_Info) { current = &Program_Info; break; }
-if (current == &Manual_Info) { current = &Manual_back_Info; break; }    
-    if (current == &Manual_back_Info) { current = &Manual_Info; break; }
-    if (current == &Temperature_Info) { current = &TemperatureViewer_Viewer; break; }    
-        if (current == &TemperatureViewer_Viewer) { current = &Temperature_Info; break; }
-    if (current == &TempSensorWork_Info) { current = &TempSensorWorkViewer_Viewer; break; }    
-        if (current == &TempSensorWorkViewer_Viewer) { current = &TempSensorWork_Info; break; }
-    if (current == &Pump_Info) { current = &PumpEditor_Editor; break; }    
-        if (current == &PumpEditor_Editor) { current = &Pump_Info; break; }
-    if (current == &Heat_Info) { current = &HeatEditor_Editor; break; }    
-        if (current == &HeatEditor_Editor) { current = &Heat_Info; break; }
-    if (current == &SetTemp_Info) { current = &SetTemp_back_Info; break; }    
-        if (current == &SetTemp_back_Info) { current = &SetTemp_Info; break; }
-        if (current == &SetTempOn_Info) { current = &SetTempOn_Editor; break; }    
-            if (current == &SetTempOn_Editor) { current = &SetTempOn_Info; break; }
-        if (current == &SetTemperature_Info) { current = &SetTemperature_Editor; break; }    
-            if (current == &SetTemperature_Editor) { current = &SetTemperature_Info; break; }
-if (current == &Settings_Info) { current = &Settings_back_Info; break; }    
-    if (current == &Settings_back_Info) { current = &Settings_Info; break; }
-    if (current == &SetTime_Info) { current = &SetTime_back_Info; break; }    
-        if (current == &SetTime_back_Info) { current = &SetTime_Info; break; }
-        if (current == &Year_Info) { current = &YearEditor_Editor; break; }    
-            if (current == &YearEditor_Editor) { current = &Year_Info; break; }
-        if (current == &Month_Info) { current = &MonthEditor_Editor; break; }    
-            if (current == &MonthEditor_Editor) { current = &Month_Info; break; }
-        if (current == &Day_Info) { current = &DayEditor_Editor; break; }    
-            if (current == &DayEditor_Editor) { current = &Day_Info; break; }
-        if (current == &Hour_Info) { current = &HourEditor_Editor; break; }    
-            if (current == &HourEditor_Editor) { current = &Hour_Info; break; }
-        if (current == &Minute_Info) { current = &MinuteEditor_Editor; break; }    
-            if (current == &MinuteEditor_Editor) { current = &Minute_Info; break; }
-    if (current == &Kp_Info) { current = &KpEditor_Editor; break; }    
-        if (current == &KpEditor_Editor) { current = &Kp_Info; break; }
-    if (current == &Ki_Info) { current = &KiEditor_Editor; break; }    
-        if (current == &KiEditor_Editor) { current = &Ki_Info; break; }
-    if (current == &Kd_Info) { current = &KdEditor_Editor; break; }    
-        if (current == &KdEditor_Editor) { current = &Kd_Info; break; }
-    if (current == &ReverseEnc_Info) { current = &ReverseEnc_Editor; break; }    
-        if (current == &ReverseEnc_Editor) { current = &ReverseEnc_Info; break; }
-}while(false);
+void downHandler(void*) {
+  #include "BtnHandlers.h"
   if (current)
       current->HandleButton();
     dataChanged = true;
 }
 
-void plus(void*)
-{
-// up handler
-do{
-if (current == &Welcome_Info) { current = &Program_Info; break; }
-if (current == &Program_Info) { current = &Manual_Info; break; }    
-    if (current == &Program_back_Info) { current = &RunProgram_Info; break; }
-    if (current == &RunProgram_Info) { current = &NewProgram_Info; break; }
-    if (current == &NewProgram_Info) { break; }
-if (current == &Manual_Info) { current = &Settings_Info; break; }    
-    if (current == &Manual_back_Info) { current = &Temperature_Info; break; }
-    if (current == &Temperature_Info) { current = &TempSensorWork_Info; break; }    
-        if (current == &TemperatureViewer_Viewer) { break; }
-    if (current == &TempSensorWork_Info) { current = &Pump_Info; break; }    
-        if (current == &TempSensorWorkViewer_Viewer) { break; }
-    if (current == &Pump_Info) { current = &Heat_Info; break; }    
-        if (current == &PumpEditor_Editor) { break; }
-    if (current == &Heat_Info) { current = &SetTemp_Info; break; }    
-        if (current == &HeatEditor_Editor) { break; }
-    if (current == &SetTemp_Info) { break; }    
-        if (current == &SetTemp_back_Info) { current = &SetTempOn_Info; break; }
-        if (current == &SetTempOn_Info) { current = &SetTemperature_Info; break; }    
-            if (current == &SetTempOn_Editor) { break; }
-        if (current == &SetTemperature_Info) { break; }    
-            if (current == &SetTemperature_Editor) { break; }
-if (current == &Settings_Info) { break; }    
-    if (current == &Settings_back_Info) { current = &SetTime_Info; break; }
-    if (current == &SetTime_Info) { current = &Kp_Info; break; }    
-        if (current == &SetTime_back_Info) { current = &Year_Info; break; }
-        if (current == &Year_Info) { current = &Month_Info; break; }    
-            if (current == &YearEditor_Editor) { break; }
-        if (current == &Month_Info) { current = &Day_Info; break; }    
-            if (current == &MonthEditor_Editor) { break; }
-        if (current == &Day_Info) { current = &Hour_Info; break; }    
-            if (current == &DayEditor_Editor) { break; }
-        if (current == &Hour_Info) { current = &Minute_Info; break; }    
-            if (current == &HourEditor_Editor) { break; }
-        if (current == &Minute_Info) { break; }    
-            if (current == &MinuteEditor_Editor) { break; }
-    if (current == &Kp_Info) { current = &Ki_Info; break; }    
-        if (current == &KpEditor_Editor) { break; }
-    if (current == &Ki_Info) { current = &Kd_Info; break; }    
-        if (current == &KiEditor_Editor) { break; }
-    if (current == &Kd_Info) { current = &ReverseEnc_Info; break; }    
-        if (current == &KdEditor_Editor) { break; }
-    if (current == &ReverseEnc_Info) { break; }    
-        if (current == &ReverseEnc_Editor) { break; }
-}while(false);
+void plus(void*) {
+  #include "UpHandlers.h"
   if (current)
       current->HandleEncoderPlus();
   dataChanged = true;
 }
 
 
-void minus(void*)
-{
-// down handler
-do{
-if (current == &Welcome_Info) { break; }
-if (current == &Program_Info) { current = &Welcome_Info; break; }    
-    if (current == &Program_back_Info) { break; }
-    if (current == &RunProgram_Info) { current = &Program_back_Info; break; }
-    if (current == &NewProgram_Info) { current = &RunProgram_Info; break; }
-if (current == &Manual_Info) { current = &Program_Info; break; }    
-    if (current == &Manual_back_Info) { break; }
-    if (current == &Temperature_Info) { current = &Manual_back_Info; break; }    
-        if (current == &TemperatureViewer_Viewer) { break; }
-    if (current == &TempSensorWork_Info) { current = &Temperature_Info; break; }    
-        if (current == &TempSensorWorkViewer_Viewer) { break; }
-    if (current == &Pump_Info) { current = &TempSensorWork_Info; break; }    
-        if (current == &PumpEditor_Editor) { break; }
-    if (current == &Heat_Info) { current = &Pump_Info; break; }    
-        if (current == &HeatEditor_Editor) { break; }
-    if (current == &SetTemp_Info) { current = &Heat_Info; break; }    
-        if (current == &SetTemp_back_Info) { break; }
-        if (current == &SetTempOn_Info) { current = &SetTemp_back_Info; break; }    
-            if (current == &SetTempOn_Editor) { break; }
-        if (current == &SetTemperature_Info) { current = &SetTempOn_Info; break; }    
-            if (current == &SetTemperature_Editor) { break; }
-if (current == &Settings_Info) { current = &Manual_Info; break; }    
-    if (current == &Settings_back_Info) { break; }
-    if (current == &SetTime_Info) { current = &Settings_back_Info; break; }    
-        if (current == &SetTime_back_Info) { break; }
-        if (current == &Year_Info) { current = &SetTime_back_Info; break; }    
-            if (current == &YearEditor_Editor) { break; }
-        if (current == &Month_Info) { current = &Year_Info; break; }    
-            if (current == &MonthEditor_Editor) { break; }
-        if (current == &Day_Info) { current = &Month_Info; break; }    
-            if (current == &DayEditor_Editor) { break; }
-        if (current == &Hour_Info) { current = &Day_Info; break; }    
-            if (current == &HourEditor_Editor) { break; }
-        if (current == &Minute_Info) { current = &Hour_Info; break; }    
-            if (current == &MinuteEditor_Editor) { break; }
-    if (current == &Kp_Info) { current = &SetTime_Info; break; }    
-        if (current == &KpEditor_Editor) { break; }
-    if (current == &Ki_Info) { current = &Kp_Info; break; }    
-        if (current == &KiEditor_Editor) { break; }
-    if (current == &Kd_Info) { current = &Ki_Info; break; }    
-        if (current == &KdEditor_Editor) { break; }
-    if (current == &ReverseEnc_Info) { current = &Kd_Info; break; }    
-        if (current == &ReverseEnc_Editor) { break; }
-}while(false);
+void minus(void*) {
+  #include "DwnHandlers.h"
   if (current)
       current->HandleEncoderMinus();
   dataChanged = true;
 }
 
-void minusHandler(void*)
-{
+void minusHandler(void*) {
   if (reverseEncoder)
     plus(0);
   else
     minus(0);
 }
 
-void plusHandler(void*)
-{
+void plusHandler(void*) {
   if (reverseEncoder)
     minus(0);
   else
     plus(0);
 }
 
-void saveTime()
-{
-    struct tm * tx;
+void saveTime() {
+    tm* tx;
     tx = rt.getTime(NULL);
 
     tx->tm_min  = minute;
@@ -1021,9 +1318,9 @@ void saveTime()
     
     rt.setTime(tx);
 }
-void loadTime()
-{
-    struct tm * tx;
+
+void loadTime() {
+    tm* tx;
     tx = rt.getTime(NULL);
 
     minute  = tx->tm_min;
@@ -1034,45 +1331,183 @@ void loadTime()
     year    = 1900 + tx->tm_year;
 }
 
-#define CONFIG_START 32
- 
-typedef struct
-{
-  float kp;
-  float ki;
-  float kd;
-  bool re;
-  float st;  
-} configuration_type;
- 
-int loadConfig() {
-  configuration_type CONFIGURATION;
-  for (unsigned int i=0; i<sizeof(CONFIGURATION); i++)
+void checkAndUpdatePID() {
+  const double EPS = 1e-5;
+  if (
+    fabs(Kp - heatReg.GetKp()) > EPS || 
+    fabs(Ki - heatReg.GetKi()) > EPS || 
+    fabs(Kd - heatReg.GetKd()) > EPS)
   {
-    *((char*)&CONFIGURATION + i) = EEPROM.read(CONFIG_START + i);
-  }
-  Kp = CONFIGURATION.kp;
-  Ki = CONFIGURATION.ki;
-  Kd = CONFIGURATION.kd;
-  reverseEncoder = CONFIGURATION.re;
-  setTemperature = CONFIGURATION.st;
-  
-  Serial.println("configuration loaded");
-  return 1;
-}
- 
-void saveConfig() {
-  configuration_type CONFIGURATION = {
-    Kp,
-    Ki,
-    Kd,
-    reverseEncoder,
-    setTemperature,
-  };
-  
-  for (unsigned int i=0; i<sizeof(CONFIGURATION); i++)
-  {
-    EEPROM.write(CONFIG_START + i, *((char*)&CONFIGURATION + i));
+    heatReg.SetTunings(Kp, Ki, Kd);
   }
 }
 
+void updateAll() {
+  for (byte i = 0;; ++i)
+  {
+    Updater* u = updaters[i];
+    if (u == 0)
+      break;
+    u->update();
+  }
+}
+
+void onSetTempWorkUpdatet(void*, bool* value) {
+  if (*value)
+  {
+  }
+  else
+  {
+    heatPower = 0;
+    heatOutput = 0;
+  }
+}
+
+void onRunProgram(void*,bool* value) {
+  programStep.value = 0;
+  if (*value)
+  {    
+    programStep.value = 0;
+  }
+  else
+  {
+    setTempWork.value = false;
+    pumpWork = false;
+
+    tone(TonePin, 1000, 200);
+    delay(100);
+    tone(TonePin, 500, 200);
+    delay(100);
+    tone(TonePin, 1000, 200);
+    delay(100);
+    tone(TonePin, 500, 200);
+    delay(100);
+    tone(TonePin, 1000, 200);
+    delay(100);
+    noTone(TonePin);
+  }
+}
+
+void onClearProgram(void*, bool* value) {
+  for (byte s = 0; s < MaxNumberOfSteps; ++s)
+  {
+    programs[program.value * MaxNumberOfSteps + s].temperature = 0;
+    programs[program.value * MaxNumberOfSteps + s].opCode = 0;
+  }    
+}
+
+void onClearAllProgram(void*, bool* value) {
+  for (byte p = 0; p < NumberOfPrograms; ++p)
+  {
+    for (byte s = 0; s < MaxNumberOfSteps; ++s)
+    {
+      programs[p * MaxNumberOfSteps + s].temperature = 0;
+      programs[p * MaxNumberOfSteps + s].opCode = 0;
+    }    
+  }
+}
+
+void writeEeprom(int deviceaddress, byte eeaddress, byte data) {
+  i2c.beginTransmission(deviceaddress);
+  i2c.write(eeaddress);
+  i2c.write(data);
+  i2c.endTransmission();
+  delay(5);
+}
+ 
+byte readEeprom(int deviceaddress, byte eeaddress) {
+  byte rdata = 0xFF;
+  i2c.beginTransmission(deviceaddress);
+  i2c.write(eeaddress);
+  i2c.endTransmission();
+ 
+  i2c.requestFrom(deviceaddress, 1);
+ 
+  if (i2c.available()) rdata = i2c.read();
+  return rdata;
+}
+
+void writeData(int address, byte data) {
+  int device = address / 256;
+  int addr = address % 256;
+  writeEeprom(0x50 + device, addr, data); 
+}
+
+byte readData(int address) {
+  int device = address / 256;
+  int addr = address % 256;
+  return readEeprom(0x50 + device, addr);
+}
+
+template<typename V> void Save(unsigned int& offset, const V& value) {
+  for (unsigned int i = 0; i < sizeof(value); ++i)
+    writeData(offset + i, *((char*)&value + i));
+  offset += sizeof(value);
+}
+
+template<typename V> void Load(unsigned int& offset, V& v) {
+  for (unsigned int i = 0; i < sizeof(v); ++i)
+    *((char*)&v + i) = readData(offset + i);
+  offset += sizeof(v);
+}
+
+void saveConfigDetail (bool savePrograms) {
+  unsigned int offset = 0;
+  Save(offset, Kp);
+  Save(offset, Ki);
+  Save(offset, Kd);
+  Save(offset, reverseEncoder);
+  Save(offset, setTemperature);
+  Save(offset, bounceDelay.value);
+  if (savePrograms)
+  {
+    Save(offset, programs);
+  }
+}
+
+void saveConfig() {
+  saveConfigDetail(false);
+}
+
+void saveConfigWithPrograms() {
+  saveConfigDetail(true);
+}
+
+void loadConfig() {
+  unsigned int offset = 0;
+  Load(offset, Kp); 
+  Load(offset, Ki); 
+  Load(offset, Kd); 
+  Load(offset, reverseEncoder); 
+  Load(offset, setTemperature); 
+  Load(offset, bounceDelay.value); 
+  Load(offset, programs);
+
+  checkAndUpdatePID();
+}
+
+void onTest(void*, bool* value)
+{
+}
+
+void onSavePrograms(void*, bool*) {
+  saveConfigWithPrograms();
+  savePrograms.value = false;
+  savePrograms.prevValue = false;
+  dataChanged = true;
+}
+
+void onSaveSettings(void*, bool*) {
+  saveConfigWithPrograms();
+  saveSettings.value = false;
+  saveSettings.prevValue = false;
+  dataChanged = true;
+}
+
+void updateCurrentTime() {
+  currentTime = *rt.getTime(NULL);
+}
+
+void onProgram(void*, byte*) {
+  viewProgramLine.cp = 0;
+}

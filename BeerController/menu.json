@@ -3,30 +3,58 @@
 		{ "id": "Welcome", "type": "info",  "args": "\"Hello, Brewer\", 0, &timeLine" },
 		{ "id": "Program", "type": "info",  "args": "\"Program\", 0, 0", "menu": [
 			{ "id": "back", "type": "info",  "args": "\"<-\", 0, 0" },
-			{ "id": "RunProgram", "type": "info", "args": "\"Run program\", 0, 0" },
-			{ "id": "NewProgram", "type": "info", "args": "\"New program\", 0, 0" }
+			{ "id": "SelectProgram", "type": "info", "args": "\"Select program\", 0, &viewProgramLine", "menu": [
+				{"id": "SelectProgram", "type": "edit", "ctype": "byte", "args": "\"Select program\", program.ptr(), 1, 0, NumberOfPrograms - 1" }
+			]},
+			{ "id": "EditProgram", "type": "info", "args": "\"Edit Program\", 0, 0", "menu": [
+				{ "id": "back", "type": "info",  "args": "\"<-\", 0, 0" },
+				{"id": "SelectStep", "type": "info", "args": "\"Select Step\", 0, 0", "menu": [
+					{"id": "SelectStep", "type": "edit", "ctype": "byte", "args": "\"Select Step\", programStep.ptr(), 1, 0, MaxNumberOfSteps - 1" }
+				]},
+				{"id": "SelectOperation", "type": "info", "args": "\"Select Operation\", 0, 0", "menu": [
+					{"id": "SelectOperation", "type": "edit", "ctype": "byte", "args": "\"Select Operation\", operation.ptr(), 1, 0, Interpreter::OP_CODE_COUNT - 1, 0, &opCodeLine"}
+				]},
+				{"id": "EditTemperature", "cond": "", "type": "info", "args": "\"Temperature\", 0, 0", "menu": [
+					{"id": "EditTemperature", "type": "edit", "ctype": "byte", "args": "\"Temperature\", programTemp.ptr(), 1, 0, 110"}
+				]},
+				{"id": "EditMinutes", "cond": "", "type": "info", "args": "\"Minutes\", 0, 0", "menu": [
+					{"id": "EditMinutes", "type": "edit", "ctype": "byte", "args": "\"Minutes\", programMinutes.ptr(), 1, 0, 255"}
+				]},
+				{ "id": "SavePrograms", "type": "info", "args": "\"Save programs\", 0, 0", "menu": [
+					{"id": "SavePrograms", "type": "edit", "ctype": "bool", "args": "\"Save programs\", savePrograms.ptr(), 1, 0, 1"}
+				]}
+			]},			
+			{ "id": "RunProgram", "type": "info", "args": "\"Run program\", 0, &runProgramLine", "menu": [
+				{"id": "RunProgram", "type": "edit", "ctype": "bool", "args": "\"Run program\", runProgram.ptr(), 1, 0, 1"}
+			]},
+			{ "id": "ClearProgram", "type": "info", "args": "\"Clear program\", 0, 0", "menu": [
+				{"id": "ClearProgram", "type": "edit", "ctype": "bool", "args": "\"Clear program\", clearProgram.ptr(), 1, 0, 1"}
+			]},
+			{ "id": "ClearAllProgram", "type": "info", "args": "\"Clear all program\", 0, 0", "menu": [
+				{"id": "ClearAllProgram", "type": "edit", "ctype": "bool", "args": "\"Clear all program\", clearAllProgram.ptr(), 1, 0, 1"}
+			]}
 		]},
 		{ "id": "Manual", "type": "info",  "args": "\"Manual Control\", 0, 0", "menu": [
 			{ "id": "back", "type": "info",  "args": "\"<-\", 0, 0" },
 			{ "id": "Temperature", "type": "info",  "args": "\"Temperature\", 0, 0", "menu": [
-				{ "id": "TemperatureViewer", "type": "view", "ctype": "float", "args": "\"Temperature\", &temperature" }
+				{ "id": "TemperatureViewer", "type": "view", "ctype": "double", "args": "\"Temperature\", &temperature" }
 			]},
 			{ "id": "TempSensorWork", "type": "info",  "args": "\"Temp Sensor Work\", 0, 0", "menu": [
 				{ "id": "TempSensorWorkViewer", "type": "view", "ctype": "bool", "args": "\"Temp Sensor Work\", &temperatureSensorWork" }
 			]},
 			{ "id": "Pump", "type": "info",  "args": "\"Pump\", 0, 0", "menu": [
-				{ "id": "PumpEditor", "type": "edit",  "ctype": "bool", "args": "\"Pump\", &pumpWork, 1, 0, 1" }
+				{ "id": "Pump", "type": "edit",  "ctype": "bool", "args": "\"Pump\", &pumpWork, 1, 0, 1" }
 			]},
 			{ "id": "Heat", "type": "info", "args": "\"Heat Power\", 0, 0", "menu": [
-				{ "id": "HeatEditor", "type": "edit", "ctype": "byte", "args": "\"Heat Power\", &heatPower, 2, 0, 100, resetHeat" }
+				{ "id": "Heat", "type": "edit", "ctype": "byte", "args": "\"Heat Power\", &heatPower, 2, 0, 100, resetHeat" }
 			]},
 			{ "id": "SetTemp", "type": "info",  "args": "\"Set temperature\", 0, 0", "menu": [
 				{ "id": "back", "type": "info",  "args": "\"<-\", 0, 0" },
 				{ "id": "SetTempOn", "type": "info", "args": "\"On/Off\", 0, 0", "menu": [
-					{ "id": "SetTempOn", "type": "edit",  "ctype": "bool", "args": "\"On/Off\", &setTemperatureWork, 1, 0, 1" }
+					{ "id": "SetTempOn", "type": "edit",  "ctype": "bool", "args": "\"On/Off\", setTempWork.ptr(), 1, 0, 1" }
 				]},
 				{ "id": "SetTemperature", "type": "info", "args": "\"Set temperature\", 0, 0", "menu": [
-					{ "id": "SetTemperature", "type": "edit",  "ctype": "float", "args": "\"Set temperature\", &setTemperature, 5, 0, 110, saveConfig" }
+					{ "id": "SetTemperature", "type": "edit",  "ctype": "double", "args": "\"Set temperature\", &setTemperature, 5, 0, 110" }
 				]}
 			]}
 		]},
@@ -35,32 +63,38 @@
 			{ "id": "SetTime", "type": "info", "args": "\"Set Time\", 0, 0", "menu": [
 				{ "id": "back", "type": "info",  "args": "\"<-\", 0, 0" },
 				{ "id": "Year", "type": "info", "args": "\"Year\", 0, 0",  "menu": [
-					{ "id": "YearEditor", "type": "edit", "ctype": "int", "args": "\"Year\", &year, 1, 1970, 2100, saveTime" }
+					{ "id": "Year", "type": "edit", "ctype": "int", "args": "\"Year\", &year, 1, 1970, 2100, saveTime" }
 				]},
 				{ "id": "Month", "type": "info", "args": "\"Month\", 0, 0", "menu": [
-					{ "id": "MonthEditor", "type": "edit", "ctype": "byte", "args": "\"Month\", &month, 1, 1, 12, saveTime" }
+					{ "id": "Month", "type": "edit", "ctype": "byte", "args": "\"Month\", &month, 1, 1, 12, saveTime" }
 				]},
 				{ "id": "Day", "type": "info", "args": "\"Day\", 0, 0", "menu": [
-					{ "id": "DayEditor", "type": "edit", "ctype": "byte", "args": "\"Day\", &day, 1, 0, 31, saveTime" }
+					{ "id": "Day", "type": "edit", "ctype": "byte", "args": "\"Day\", &day, 1, 0, 31, saveTime" }
 				]},
 				{ "id": "Hour", "type": "info", "args": "\"Hour\", 0, 0", "menu": [
-					{ "id": "HourEditor", "type": "edit", "ctype": "byte", "args": "\"Hour\", &hour, 1, 0, 23, saveTime" }
+					{ "id": "Hour", "type": "edit", "ctype": "byte", "args": "\"Hour\", &hour, 1, 0, 23, saveTime" }
 				]},
 				{ "id": "Minute", "type": "info", "args": "\"Minute\", 0, 0", "menu": [
-					{ "id": "MinuteEditor", "type": "edit", "ctype": "byte", "args": "\"Minute\", &minute, 1, 0, 59, saveTime" }
+					{ "id": "Minute", "type": "edit", "ctype": "byte", "args": "\"Minute\", &minute, 1, 0, 59, saveTime" }
 				]}
 			]},
 			{ "id": "Kp", "type": "info", "args": "\"Kp\", 0, 0", "menu": [
-				{ "id": "KpEditor", "type": "edit", "ctype": "float", "args": "\"Kp\", &Kp, 0.1, 0, 100, saveConfig" }
+				{ "id": "Kp", "type": "edit", "ctype": "float", "args": "\"Kp\", &Kp, 0.1, 0, 100" }
 			]},
 			{ "id": "Ki", "type": "info", "args": "\"Ki\", 0, 0", "menu": [
-				{ "id": "KiEditor", "type": "edit", "ctype": "float", "args": "\"Ki\", &Ki, 0.001, 0, 100, saveConfig" }
+				{ "id": "Ki", "type": "edit", "ctype": "float", "args": "\"Ki\", &Ki, 0.0001, 0, 100" }
 			]},
 			{ "id": "Kd", "type": "info", "args": "\"Kd\", 0, 0", "menu": [
-				{ "id": "KdEditor", "type": "edit", "ctype": "float", "args": "\"Kd\", &Kd, 0.001, 0, 100, saveConfig" }
+				{ "id": "Kd", "type": "edit", "ctype": "float", "args": "\"Kd\", &Kd, 0.001, 0, 100" }
 			]},
 			{ "id": "ReverseEnc", "type": "info", "args": "\"Reverse Encoder\", 0, 0", "menu": [
-				{ "id": "ReverseEnc", "type": "edit", "ctype": "bool", "args": "\"Reverse Encoder\", &reverseEncoder, 1, 0, 1, saveConfig" }
+				{ "id": "ReverseEnc", "type": "edit", "ctype": "bool", "args": "\"Reverse Encoder\", &reverseEncoder, 1, 0, 1" }
+			]},
+			{ "id": "BounceDelay", "type": "info", "args": "\"Bounce delay\", 0, 0", "menu": [
+				{ "id": "BounceDelay", "type": "edit", "ctype": "byte", "args": "\"Bounce delay\", bounceDelay.ptr(), 1, 0, 10" }
+			]},
+			{ "id": "SaveSettings", "type": "info", "args": "\"Save settings\", 0, 0", "menu": [
+				{ "id": "SaveSettings", "type": "edit", "ctype": "bool", "args": "\"Save settings\", saveSettings.ptr(), 1, 0, 1" }
 			]}
 		]}
 	]
