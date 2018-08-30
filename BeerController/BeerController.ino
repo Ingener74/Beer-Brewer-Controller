@@ -11,14 +11,6 @@
 
 // https://www.youtube.com/watch?v=IenFIIMIbyk - cool menu
 
-/*
-
-* Программный режим работы
-* Редактирование программ
-* Сохранение и загрузка программ
-* 
-*/
-
 ///////////////////////////////////////////////////////////////////////
 struct MyTimer
 {
@@ -770,13 +762,19 @@ struct RunProgramLine: Line
     bool* runProgram,
     byte* program,
     byte* step,
-    double* temperature
+    double* temperature,
+    tm* currentTime,
+    tm* nextTime,
+    byte* heatPower
     )
     : _programs(programs)
     , _runProgram(runProgram)
     , _program(program)
     , _step(step)
     , _temperature(temperature)
+    , _currentTime(currentTime)
+    , _nextTime(nextTime)
+    , _heatPower(heatPower)
   {
   }
 
@@ -788,32 +786,25 @@ struct RunProgramLine: Line
   void updateBuffer()
   {
     char opcode[16];
+    memset(opcode, 0, sizeof(opcode));
     snprintf(opcode, sizeof(opcode), "%s", Interpreter::operations[_programs[*_program * MaxNumberOfSteps + *_step].opCode]);
 
     char progPrm[32];
+    memset(progPrm, 0, sizeof(progPrm));
     if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::WAIT)
-    {
-      // TODO сколько осталось минут показывать
-      char fromBuffer[32];
-      snprintf("%d:%d", );
-      char toBuffer[32];
-      snprintf("%d:%d", );
-      snprintf(progPrm, sizeof(progPrm), "%s -> %s", fromBuffer, toBuffer); // _programs[*_program * MaxNumberOfSteps + *_step].minutes
-    }
+      snprintf(progPrm, sizeof(progPrm), "(%d)%02d:%02d -> %02d:%02d", 
+        _programs[*_program * MaxNumberOfSteps + *_step].minutes, _currentTime->tm_hour, _currentTime->tm_min, _nextTime->tm_hour, _nextTime->tm_min);
     else if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::HEAT)
-    {
-      snprintf(progPrm, sizeof(progPrm), "%.1f -> %d", *_temperature, _programs[*_program * MaxNumberOfSteps + *_step].temperature);
-    }
+      snprintf(progPrm, sizeof(progPrm), "%.1f%cC -> %d%cC", *_temperature, 0xDF, _programs[*_program * MaxNumberOfSteps + *_step].temperature, 0xDF);
     else if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::COLD)
-    {
-      snprintf(progPrm, sizeof(progPrm), "%d <- %.1f", _programs[*_program * MaxNumberOfSteps + *_step].temperature, *_temperature);
-    }
+      snprintf(progPrm, sizeof(progPrm), "%d%cC <- %.1f%cC", _programs[*_program * MaxNumberOfSteps + *_step].temperature, 0xDF, *_temperature, 0xDF);
 
     char onOff[4];
+    memset(onOff, 0, sizeof(onOff));
     snprintf(onOff, sizeof(onOff), "%s", (*_runProgram) ? "On" : "Off");
 
-    // TODO выводить всегда мощьность и включен или выключен насос и всегда показывать температуру
-    snprintf(buffer, sizeof(buffer), "   Program %d(%s), Step %d, %s, %s   ", *_program, onOff, *_step, opcode, progPrm);
+    // TODO выводить включен или выключен насос и всегда показывать температуру
+    snprintf(buffer, sizeof(buffer), "   Pr %d(%s), S %d, %s, %s, Heat power %d   ", *_program, onOff, *_step, opcode, progPrm, * _heatPower);
   }
 
   void print(LiquidCrystal_I2C& lcd) {
@@ -861,6 +852,9 @@ struct RunProgramLine: Line
   byte* _program;
   byte* _step;
   double* _temperature;
+  tm* _currentTime;
+  tm* _nextTime;
+  byte* _heatPower;
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -880,6 +874,7 @@ struct ViewProgramLine: Line
     char steps[MaxNumberOfSteps][32];
     for (uint8 i = 0; i < MaxNumberOfSteps; ++i)
     {
+      memset(steps[i], 0, sizeof(steps[i]));
       if (false) {}
       else if (_programs[*_program * MaxNumberOfSteps + i].opCode == Interpreter::WAIT)
         snprintf(&steps[i][0], sizeof(steps[i]), "%d:Wait %d min", i, _programs[*_program * MaxNumberOfSteps + i].minutes);
@@ -991,13 +986,10 @@ double temperature = 0.0;
 bool temperatureSensorWork = false;
 SingleMillisecondTimer temperatureTimer;
 
-const int zeroOffsetAddr = 0;
-int zeroOffset = 0;
-int pumpPower = 0;
 bool pumpWork = 0;
 byte heatPower = 0;
-
 PowerControl heat(HeatPin, &heatPower);
+
 void resetHeat();
 
 void onSetTempWorkUpdatet(void*, bool*);
@@ -1040,7 +1032,7 @@ Interpreter interpreter(
   runProgram.ptr(), 
   &currentTime);
 
-RunProgramLine runProgramLine(programs, runProgram.ptr(), program.ptr(), programStep.ptr(), &temperature);
+RunProgramLine runProgramLine(programs, runProgram.ptr(), program.ptr(), programStep.ptr(), &temperature, &currentTime, &interpreter._waitTime, &heatPower);
 ViewProgramLine viewProgramLine(programs, program.ptr());
 
 OperationsLine opCodeLine(operation.ptr());
@@ -1210,7 +1202,6 @@ void loop()
 
     Serial.print(temperature); Serial.print(" ");
     Serial.print(setTemperature); Serial.print(" ");
-    Serial.print(heatOutput); Serial.print(" ");
     Serial.print(heatPower); Serial.print(" ");
     Serial.println("");
 
@@ -1393,7 +1384,10 @@ void onClearProgram(void*, bool* value) {
   {
     programs[program.value * MaxNumberOfSteps + s].temperature = 0;
     programs[program.value * MaxNumberOfSteps + s].opCode = 0;
-  }    
+  }
+  clearProgram.value = false;
+  clearProgram.prevValue = false;
+  dataChanged = true;
 }
 
 void onClearAllProgram(void*, bool* value) {
@@ -1405,6 +1399,10 @@ void onClearAllProgram(void*, bool* value) {
       programs[p * MaxNumberOfSteps + s].opCode = 0;
     }    
   }
+  clearAllProgram.value = false;
+  clearAllProgram.prevValue = false;
+  dataChanged = true;
+  saveConfigWithPrograms();
 }
 
 void writeEeprom(int deviceaddress, byte eeaddress, byte data) {
@@ -1459,6 +1457,7 @@ void saveConfigDetail (bool savePrograms) {
   Save(offset, reverseEncoder);
   Save(offset, setTemperature);
   Save(offset, bounceDelay.value);
+  Save(offset, program.value);
   if (savePrograms)
   {
     Save(offset, programs);
@@ -1481,6 +1480,7 @@ void loadConfig() {
   Load(offset, reverseEncoder); 
   Load(offset, setTemperature); 
   Load(offset, bounceDelay.value); 
+  Load(offset, program.value);
   Load(offset, programs);
 
   checkAndUpdatePID();
@@ -1498,7 +1498,7 @@ void onSavePrograms(void*, bool*) {
 }
 
 void onSaveSettings(void*, bool*) {
-  saveConfigWithPrograms();
+  saveConfig();
   saveSettings.value = false;
   saveSettings.prevValue = false;
   dataChanged = true;

@@ -55,7 +55,7 @@ MenuInfo Settings_Info("Settings", 0, 0);
     MenuInfo Kp_Info("Kp", 0, 0);    
         MenuEditor<float> Kp_Editor("Kp", &Kp, 0.1, 0, 100);
     MenuInfo Ki_Info("Ki", 0, 0);    
-        MenuEditor<float> Ki_Editor("Ki", &Ki, 0.001, 0, 100);
+        MenuEditor<float> Ki_Editor("Ki", &Ki, 0.0001, 0, 100);
     MenuInfo Kd_Info("Kd", 0, 0);    
         MenuEditor<float> Kd_Editor("Kd", &Kd, 0.001, 0, 100);
     MenuInfo ReverseEnc_Info("Reverse Encoder", 0, 0);    
