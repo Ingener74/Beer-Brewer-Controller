@@ -194,11 +194,11 @@ struct RotaryEncoder
     }
   }
   
-  void init(int pinA_, int pinB_, Handler plus_, Handler minus_)
+  void init(int pinA_, int pinB_, Handler plus_, Handler minus_, byte* bounceDelay = 0)
   {
-    a.init(pinA_, aDown, 0);
+    a.init(pinA_, aDown, 0, bounceDelay);
     a.userData = this;
-    b.init(pinB_, bDown, 0);
+    b.init(pinB_, bDown, 0, bounceDelay);
     b.userData = this;
     plus = plus_;
     minus = minus_;
@@ -765,7 +765,8 @@ struct RunProgramLine: Line
     double* temperature,
     tm* currentTime,
     tm* nextTime,
-    byte* heatPower
+    byte* heatPower,
+    bool* pumpOnOff
     )
     : _programs(programs)
     , _runProgram(runProgram)
@@ -775,6 +776,7 @@ struct RunProgramLine: Line
     , _currentTime(currentTime)
     , _nextTime(nextTime)
     , _heatPower(heatPower)
+    , _pumpOnOff(pumpOnOff)
   {
   }
 
@@ -792,8 +794,8 @@ struct RunProgramLine: Line
     char progPrm[32];
     memset(progPrm, 0, sizeof(progPrm));
     if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::WAIT)
-      snprintf(progPrm, sizeof(progPrm), "(%d)%02d:%02d -> %02d:%02d", 
-        _programs[*_program * MaxNumberOfSteps + *_step].minutes, _currentTime->tm_hour, _currentTime->tm_min, _nextTime->tm_hour, _nextTime->tm_min);
+      snprintf(progPrm, sizeof(progPrm), "(%d min)%02d:%02d -> %02d:%02d, Temp %.1f%cC", 
+        _programs[*_program * MaxNumberOfSteps + *_step].minutes, _currentTime->tm_hour, _currentTime->tm_min, _nextTime->tm_hour, _nextTime->tm_min, *_temperature, 0xDF);
     else if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::HEAT)
       snprintf(progPrm, sizeof(progPrm), "%.1f%cC -> %d%cC", *_temperature, 0xDF, _programs[*_program * MaxNumberOfSteps + *_step].temperature, 0xDF);
     else if (_programs[*_program * MaxNumberOfSteps + *_step].opCode == Interpreter::COLD)
@@ -803,8 +805,11 @@ struct RunProgramLine: Line
     memset(onOff, 0, sizeof(onOff));
     snprintf(onOff, sizeof(onOff), "%s", (*_runProgram) ? "On" : "Off");
 
-    // TODO выводить включен или выключен насос и всегда показывать температуру
-    snprintf(buffer, sizeof(buffer), "   Pr %d(%s), S %d, %s, %s, Heat power %d   ", *_program, onOff, *_step, opcode, progPrm, * _heatPower);
+    char pumpOnOff[4];
+    memset(pumpOnOff, 0, sizeof(pumpOnOff));
+    snprintf(pumpOnOff, sizeof(pumpOnOff), "%s", (*_pumpOnOff) ? "On" : "Off");
+
+    snprintf(buffer, sizeof(buffer), "   Pr %d(%s), S %d, %s, %s, Heat power %d, Pump %s   ", *_program, onOff, *_step, opcode, progPrm, * _heatPower, pumpOnOff);
   }
 
   void print(LiquidCrystal_I2C& lcd) {
@@ -855,6 +860,7 @@ struct RunProgramLine: Line
   tm* _currentTime;
   tm* _nextTime;
   byte* _heatPower;
+  bool* _pumpOnOff;
 };
 
 ///////////////////////////////////////////////////////////////////////
@@ -1032,7 +1038,7 @@ Interpreter interpreter(
   runProgram.ptr(), 
   &currentTime);
 
-RunProgramLine runProgramLine(programs, runProgram.ptr(), program.ptr(), programStep.ptr(), &temperature, &currentTime, &interpreter._waitTime, &heatPower);
+RunProgramLine runProgramLine(programs, runProgram.ptr(), program.ptr(), programStep.ptr(), &temperature, &currentTime, &interpreter._waitTime, &heatPower, &pumpWork);
 ViewProgramLine viewProgramLine(programs, program.ptr());
 
 OperationsLine opCodeLine(operation.ptr());
@@ -1142,7 +1148,7 @@ void setup()
   loadConfig();
 
   button.init(ReButtonPin, downHandler, 0, bounceDelay.ptr());
-  encoder.init(RePin1, RePin2, plusHandler, minusHandler);
+  encoder.init(RePin1, RePin2, plusHandler, minusHandler, bounceDelay.ptr());
 
   lcd.begin();
 
@@ -1357,7 +1363,7 @@ void onSetTempWorkUpdatet(void*, bool* value) {
 void onRunProgram(void*,bool* value) {
   programStep.value = 0;
   if (*value)
-  {    
+  {
     programStep.value = 0;
   }
   else
